@@ -40,7 +40,7 @@ export default function Login() {
       <Paper sx={{ p: 4, width: 380, maxWidth: '90vw' }}>
         <Box sx={{ textAlign: 'center', mb: 3 }}>
           <LockIcon sx={{ fontSize: 40, color: 'primary.main', mb: 1 }} />
-          <Typography variant="h6" fontWeight={600}>BotPortal</Typography>
+          <Typography variant="h6" fontWeight={600}>Rabbit</Typography>
           <Typography variant="caption" color="text.secondary">Sign in to your account</Typography>
         </Box>
 

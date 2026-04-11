@@ -7,11 +7,27 @@ import { validate, loginSchema, changePasswordSchema } from '../validation/schem
 
 const router = Router();
 
-// GET /api/auth/me — current authenticated user
-router.get('/me', (req, res) => {
+// GET /api/auth/me — current authenticated user (fresh from DB)
+router.get('/me', async (req, res) => {
   if (!req.session?.user) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
+  // Refresh from DB to get latest credits/channels
+  const user = await db('users').where('id', req.session.user.id).first();
+  if (!user) return res.status(401).json({ error: 'User not found' });
+
+  req.session.user = {
+    id:                    user.id,
+    name:                  user.name,
+    email:                 user.email,
+    role:                  user.role,
+    credits:               user.credits || 0,
+    allowed_channels:      user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'],
+    status:                user.status || null,
+    hwid_reset_enabled:    !!user.hwid_reset_enabled,
+    last_login_at:         user.last_login_at || null,
+    force_password_change: !!user.force_password_change,
+  };
   res.json(req.session.user);
 });
 
@@ -24,6 +40,9 @@ router.post('/login', validate(loginSchema), async (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
+  // Update last login
+  await db('users').where('id', user.id).update({ last_login_at: db.fn.now() });
+
   // Regenerate session (prevent fixation)
   req.session.regenerate((err) => {
     if (err) return res.status(500).json({ error: 'Session error' });
@@ -34,6 +53,8 @@ router.post('/login', validate(loginSchema), async (req, res) => {
       name:                  user.name,
       email:                 user.email,
       role:                  user.role,
+      credits:               user.credits || 0,
+      allowed_channels:      user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'],
       force_password_change: !!user.force_password_change,
     };
 

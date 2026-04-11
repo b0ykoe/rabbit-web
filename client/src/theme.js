@@ -76,8 +76,23 @@ const theme = createTheme({
     MuiChip: {
       styleOverrides: {
         root: {
-          fontWeight: 500,
-          fontSize: '0.75rem',
+          fontWeight: 600,
+          fontSize: '0.6875rem',
+          textTransform: 'uppercase',
+          letterSpacing: '0.03em',
+          height: 22,
+        },
+        sizeSmall: {
+          height: 22,
+          fontSize: '0.6875rem',
+        },
+        label: {
+          paddingLeft: 8,
+          paddingRight: 8,
+        },
+        labelSmall: {
+          paddingLeft: 6,
+          paddingRight: 6,
         },
       },
     },

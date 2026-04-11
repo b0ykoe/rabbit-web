@@ -21,8 +21,14 @@ import adminLicensesRoutes  from './routes/admin.licenses.js';
 import adminReleasesRoutes  from './routes/admin.releases.js';
 import adminSessionsRoutes  from './routes/admin.sessions.js';
 import adminAuditRoutes     from './routes/admin.audit.js';
+import adminStatusesRoutes  from './routes/admin.statuses.js';
 import portalDashboardRoutes from './routes/portal.dashboard.js';
 import portalKeysRoutes     from './routes/portal.keys.js';
+import portalRedeemRoutes   from './routes/portal.redeem.js';
+import portalShopRoutes     from './routes/portal.shop.js';
+import portalDownloadRoutes from './routes/portal.download.js';
+import portalStatusesRoutes from './routes/portal.statuses.js';
+import portalResetHwidRoutes from './routes/portal.reset-hwid.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -75,11 +81,17 @@ app.use('/api/admin/licenses',  adminLicensesRoutes);
 app.use('/api/admin/releases',  adminReleasesRoutes);
 app.use('/api/admin/sessions',  adminSessionsRoutes);
 app.use('/api/admin/audit',     adminAuditRoutes);
+app.use('/api/admin/statuses',  adminStatusesRoutes);
 
 // ── Portal API Routes ────────────────────────────────────────────────────────
 
 app.use('/api/portal/dashboard', portalDashboardRoutes);
 app.use('/api/portal/keys',      portalKeysRoutes);
+app.use('/api/portal/redeem',    portalRedeemRoutes);
+app.use('/api/portal/statuses',  portalStatusesRoutes);
+app.use('/api/portal/shop',      portalShopRoutes);
+app.use('/api/portal/download',  portalDownloadRoutes);
+app.use('/api/portal/reset-hwid', portalResetHwidRoutes);
 
 // ── Static Files (React build — production only) ─────────────────────────────
 // In dev, Vite serves the frontend on :5173 and proxies /api to Express.
@@ -113,7 +125,7 @@ app.use((err, req, res, _next) => {
 
 const port = config.port;
 app.listen(port, () => {
-  console.log(`[server] Bot Portal running on http://localhost:${port}`);
+  console.log(`[server] Rabbit running on http://localhost:${port}`);
   console.log(`[server] Environment: ${config.env}`);
 });
 

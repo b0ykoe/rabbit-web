@@ -22,6 +22,7 @@ export default function Sessions() {
       render: (row) => <Typography variant="caption" fontFamily="monospace">{row.session_id.slice(0, 20)}...</Typography>,
     },
     { id: 'license_key', label: 'Key', render: (row) => <CopyableText text={row.license_key} /> },
+    { id: 'hwid', label: 'HWID', render: (row) => <Typography variant="caption" fontFamily="monospace" color="text.secondary">{row.hwid || 'N/A'}</Typography> },
     { id: 'user', label: 'User', render: (row) => row.user_name || <Typography variant="caption" color="text.disabled">unassigned</Typography> },
     {
       id: 'status', label: 'Status',

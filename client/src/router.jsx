@@ -13,11 +13,13 @@ import Users from './components/admin/Users.jsx';
 import Licenses from './components/admin/Licenses.jsx';
 import Releases from './components/admin/Releases.jsx';
 import Sessions from './components/admin/Sessions.jsx';
+import Statuses from './components/admin/Statuses.jsx';
 import AuditLog from './components/admin/AuditLog.jsx';
 
 // Portal
 import PortalDashboard from './components/portal/Dashboard.jsx';
 import Keys from './components/portal/Keys.jsx';
+import Shop from './components/portal/Shop.jsx';
 
 export default function AppRouter() {
   return (
@@ -43,6 +45,7 @@ export default function AppRouter() {
         <Route path="licenses" element={<Licenses />} />
         <Route path="releases" element={<Releases />} />
         <Route path="sessions" element={<Sessions />} />
+        <Route path="statuses" element={<Statuses />} />
         <Route path="audit" element={<AuditLog />} />
       </Route>
 
@@ -54,6 +57,7 @@ export default function AppRouter() {
       }>
         <Route index element={<PortalDashboard />} />
         <Route path="keys" element={<Keys />} />
+        <Route path="shop" element={<Shop />} />
       </Route>
 
       {/* Default redirect */}

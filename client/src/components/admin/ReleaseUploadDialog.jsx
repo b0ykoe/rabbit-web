@@ -4,6 +4,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
   const [type, setType]           = useState('dll');
+  const [channel, setChannel]     = useState('release');
   const [version, setVersion]     = useState('');
   const [changelog, setChangelog] = useState('');
   const [file, setFile]           = useState(null);
@@ -18,11 +19,12 @@ export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
     try {
       const formData = new FormData();
       formData.append('type', type);
+      formData.append('channel', channel);
       formData.append('version', version);
       formData.append('changelog', changelog);
       formData.append('file', file);
       await onSubmit(formData);
-      setType('dll'); setVersion(''); setChangelog(''); setFile(null);
+      setType('dll'); setChannel('release'); setVersion(''); setChangelog(''); setFile(null);
       onClose();
     } catch (err) {
       const errors = err.data?.errors;
@@ -41,6 +43,11 @@ export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
           <TextField label="Type" select size="small" value={type} onChange={(e) => setType(e.target.value)}>
             <MenuItem value="dll">DLL</MenuItem>
             <MenuItem value="loader">Loader</MenuItem>
+          </TextField>
+          <TextField label="Channel" select size="small" value={channel} onChange={(e) => setChannel(e.target.value)}>
+            <MenuItem value="release">Release</MenuItem>
+            <MenuItem value="beta">Beta</MenuItem>
+            <MenuItem value="alpha">Alpha</MenuItem>
           </TextField>
           <TextField
             label="Version"

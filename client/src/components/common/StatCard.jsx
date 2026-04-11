@@ -2,7 +2,7 @@ import { Paper, Typography, Box } from '@mui/material';
 
 export default function StatCard({ label, value, subtitle, icon, color = 'text.primary' }) {
   return (
-    <Paper sx={{ p: 2 }}>
+    <Paper sx={{ p: 2.5, flex: 1, display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>

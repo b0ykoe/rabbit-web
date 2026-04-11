@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
 
   const licenses = await db('licenses')
     .where('user_id', userId)
-    .select('license_key', 'max_sessions', 'active', 'note');
+    .select('license_key', 'max_sessions', 'active', 'note', 'expires_at', 'bound_hwid');
 
   const keys = licenses.map(l => l.license_key);
   let allSessions = [];
@@ -18,7 +18,7 @@ router.get('/', async (req, res) => {
     allSessions = await db('bot_sessions')
       .whereIn('license_key', keys)
       .orderBy('last_heartbeat', 'desc')
-      .select('session_id', 'license_key', 'started_at', 'last_heartbeat');
+      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat');
   }
 
   for (const lic of licenses) {

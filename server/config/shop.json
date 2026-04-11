@@ -1,0 +1,10 @@
+{
+  "products": [
+    { "id": "license-1mo",  "name": "1 Month License",    "type": "new_license",    "duration_days": 30,   "credits_cost": 500,  "max_sessions": 1 },
+    { "id": "license-3mo",  "name": "3 Month License",    "type": "new_license",    "duration_days": 90,   "credits_cost": 1200, "max_sessions": 1 },
+    { "id": "license-life", "name": "Lifetime License",    "type": "new_license",    "duration_days": null,  "credits_cost": 5000, "max_sessions": 1 },
+    { "id": "extend-30d",   "name": "Extend 30 Days",     "type": "extend_license", "duration_days": 30,   "credits_cost": 500  },
+    { "id": "extend-90d",   "name": "Extend 90 Days",     "type": "extend_license", "duration_days": 90,   "credits_cost": 1200 },
+    { "id": "extend-life",  "name": "Extend to Lifetime",  "type": "extend_license", "duration_days": null,  "credits_cost": 5000 }
+  ]
+}

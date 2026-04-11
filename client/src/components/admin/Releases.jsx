@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { Box, Typography, Button, Paper, Chip } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import EditIcon from '@mui/icons-material/Edit';
 import StatusBadge from '../common/StatusBadge.jsx';
+import { getChannelColor } from '../../utils/format.js';
+import CopyableText from '../common/CopyableText.jsx';
 import ReleaseUploadDialog from './ReleaseUploadDialog.jsx';
+import ChangelogEditDialog from './ChangelogEditDialog.jsx';
 import { adminApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
@@ -11,6 +15,7 @@ export default function Releases() {
   const { data, loading, refetch } = useApi(() => adminApi.getReleases(), []);
   const { showSnackbar } = useSnackbar();
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [editRelease, setEditRelease] = useState(null);
 
   const handleUpload = async (formData) => {
     await adminApi.uploadRelease(formData);
@@ -21,6 +26,18 @@ export default function Releases() {
   const handleActivate = async (id) => {
     await adminApi.activateRelease(id);
     showSnackbar('Release activated');
+    refetch();
+  };
+
+  const handleDeactivate = async (id) => {
+    await adminApi.deactivateRelease(id);
+    showSnackbar('Release deactivated');
+    refetch();
+  };
+
+  const handleEditChangelog = async (id, data) => {
+    await adminApi.updateRelease(id, data);
+    showSnackbar('Changelog updated');
     refetch();
   };
 
@@ -50,7 +67,8 @@ export default function Releases() {
                 <thead>
                   <tr>
                     <th align="left">Version</th>
-                    <th align="left">SHA-256</th>
+                    <th align="left">Channel</th>
+                    <th align="left">Hashes</th>
                     <th align="left">Status</th>
                     <th align="left">Date</th>
                     <th align="right"></th>
@@ -60,13 +78,33 @@ export default function Releases() {
                   {data[type].map((r) => (
                     <tr key={r.id}>
                       <td><Typography fontWeight={600} variant="body2">v{r.version}</Typography></td>
-                      <td><Typography variant="caption" fontFamily="monospace" color="text.secondary">{r.sha256.slice(0, 16)}...</Typography></td>
+                      <td><Chip label={r.channel || 'release'} size="small" color={getChannelColor(r.channel)} variant="outlined" sx={{ fontSize: '0.65rem' }} /></td>
+                      <td>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem', minWidth: 36 }}>SHA-256</Typography>
+                            <CopyableText text={r.sha256} />
+                          </Box>
+                          {r.md5 && (
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                              <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.6rem', minWidth: 36 }}>MD5</Typography>
+                              <CopyableText text={r.md5} />
+                            </Box>
+                          )}
+                        </Box>
+                      </td>
                       <td>{r.active ? <StatusBadge status="active" /> : <Chip label="Inactive" size="small" variant="outlined" />}</td>
                       <td><Typography variant="caption" color="text.secondary">{new Date(r.created_at).toLocaleDateString()}</Typography></td>
                       <td align="right">
-                        {!r.active && (
-                          <Button size="small" onClick={() => handleActivate(r.id)}>Activate</Button>
-                        )}
+                        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                          <Button size="small" startIcon={<EditIcon />} onClick={() => setEditRelease(r)}>Edit</Button>
+                          {!r.active && (
+                            <Button size="small" onClick={() => handleActivate(r.id)}>Activate</Button>
+                          )}
+                          {r.active && (
+                            <Button size="small" color="warning" onClick={() => handleDeactivate(r.id)}>Deactivate</Button>
+                          )}
+                        </Box>
                       </td>
                     </tr>
                   ))}
@@ -78,6 +116,7 @@ export default function Releases() {
       ))}
 
       <ReleaseUploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onSubmit={handleUpload} />
+      <ChangelogEditDialog open={!!editRelease} onClose={() => setEditRelease(null)} onSubmit={handleEditChangelog} release={editRelease} />
     </Box>
   );
 }

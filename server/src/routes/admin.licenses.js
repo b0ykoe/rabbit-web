@@ -2,7 +2,7 @@ import { Router } from 'express';
 import db from '../db.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
-import { validate, createLicenseSchema, assignLicenseSchema } from '../validation/schemas.js';
+import { validate, createLicenseSchema, updateLicenseSchema, extendLicenseSchema, assignLicenseSchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -22,6 +22,8 @@ router.get('/', async (req, res) => {
         'licenses.max_sessions',
         'licenses.active',
         'licenses.note',
+        'licenses.expires_at',
+        'licenses.bound_hwid',
         'licenses.created_at',
         'users.name as user_name',
         'users.email as user_email',
@@ -44,7 +46,6 @@ router.get('/', async (req, res) => {
     for (const r of rows) r.live_sessions = countMap[r.license_key] || 0;
   }
 
-  // Fetch all users for assign dropdown
   const users = await db('users').select('id', 'name', 'email').orderBy('name');
 
   res.json({
@@ -58,22 +59,80 @@ router.get('/', async (req, res) => {
 
 // POST /api/admin/licenses — create new key
 router.post('/', validate(createLicenseSchema), async (req, res) => {
-  const { max_sessions, note } = req.validated;
+  const { max_sessions, note, expires_at } = req.validated;
   const key = generateKey();
 
   await db('licenses').insert({
     license_key:  key,
     max_sessions,
     note:         note || null,
+    expires_at:   expires_at || null,
     active:       true,
   });
 
   await recordAudit(db, req, {
     action: 'license.create', subjectType: 'license', subjectId: key,
-    newValues: { license_key: key, max_sessions, note },
+    newValues: { license_key: key, max_sessions, note, expires_at },
   });
 
-  res.status(201).json({ license_key: key, max_sessions, note });
+  res.status(201).json({ license_key: key, max_sessions, note, expires_at });
+});
+
+// PATCH /api/admin/licenses/:key — edit license
+router.patch('/:key', validate(updateLicenseSchema), async (req, res) => {
+  const { key } = req.params;
+  const lic = await db('licenses').where('license_key', key).first();
+  if (!lic) return res.status(404).json({ error: 'License not found' });
+
+  const updates = {};
+  const oldValues = {};
+  const newValues = {};
+
+  for (const field of ['max_sessions', 'note', 'expires_at']) {
+    if (req.validated[field] !== undefined) {
+      oldValues[field] = lic[field];
+      newValues[field] = req.validated[field];
+      updates[field]   = req.validated[field];
+    }
+  }
+
+  if (Object.keys(updates).length === 0) return res.json({ message: 'No changes' });
+
+  await db('licenses').where('license_key', key).update(updates);
+  await recordAudit(db, req, {
+    action: 'license.update', subjectType: 'license', subjectId: key, oldValues, newValues,
+  });
+
+  res.json({ message: 'License updated' });
+});
+
+// PATCH /api/admin/licenses/:key/extend — extend expiration
+router.patch('/:key/extend', validate(extendLicenseSchema), async (req, res) => {
+  const { key } = req.params;
+  const lic = await db('licenses').where('license_key', key).first();
+  if (!lic) return res.status(404).json({ error: 'License not found' });
+
+  let newExpiry;
+  if (req.validated.expires_at !== undefined) {
+    // Set explicit date (null = lifetime)
+    newExpiry = req.validated.expires_at;
+  } else if (req.validated.days) {
+    // Add days from current expiry (or from now if expired/null)
+    const base = lic.expires_at && new Date(lic.expires_at) > new Date()
+      ? new Date(lic.expires_at)
+      : new Date();
+    base.setDate(base.getDate() + req.validated.days);
+    newExpiry = base.toISOString().slice(0, 19).replace('T', ' ');
+  }
+
+  await db('licenses').where('license_key', key).update({ expires_at: newExpiry });
+  await recordAudit(db, req, {
+    action: 'license.extend', subjectType: 'license', subjectId: key,
+    oldValues: { expires_at: lic.expires_at },
+    newValues: { expires_at: newExpiry },
+  });
+
+  res.json({ expires_at: newExpiry, message: 'License extended' });
 });
 
 // PATCH /api/admin/licenses/:key/revoke
@@ -106,6 +165,26 @@ router.patch('/:key/assign', validate(assignLicenseSchema), async (req, res) => 
   });
 
   res.json({ message: user_id ? 'License assigned' : 'License unassigned' });
+});
+
+// PATCH /api/admin/licenses/:key/reset-hwid — admin resets bound HWID
+router.patch('/:key/reset-hwid', async (req, res) => {
+  const { key } = req.params;
+  const lic = await db('licenses').where('license_key', key).first();
+  if (!lic) return res.status(404).json({ error: 'License not found' });
+  if (!lic.bound_hwid) return res.json({ message: 'No HWID bound' });
+
+  await db('licenses').where('license_key', key).update({ bound_hwid: null });
+  // Also kill active sessions for this key so the new HWID can connect
+  await db('bot_sessions').where('license_key', key).del();
+
+  await recordAudit(db, req, {
+    action: 'license.reset_hwid', subjectType: 'license', subjectId: key,
+    oldValues: { bound_hwid: lic.bound_hwid },
+    newValues: { bound_hwid: null },
+  });
+
+  res.json({ message: 'HWID reset' });
 });
 
 export default router;

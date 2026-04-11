@@ -20,6 +20,7 @@ router.get('/', async (req, res) => {
       .select(
         'bot_sessions.session_id',
         'bot_sessions.license_key',
+        'bot_sessions.hwid',
         'bot_sessions.started_at',
         'bot_sessions.last_heartbeat',
         'users.name as user_name',

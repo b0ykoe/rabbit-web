@@ -9,6 +9,7 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SensorsIcon from '@mui/icons-material/Sensors';
 import HistoryIcon from '@mui/icons-material/History';
+import AnnouncementIcon from '@mui/icons-material/Announcement';
 import LogoutIcon from '@mui/icons-material/Logout';
 import { useAuth } from '../../context/AuthContext.jsx';
 
@@ -20,6 +21,7 @@ const navItems = [
   { label: 'Licenses',  icon: <VpnKeyIcon />,      path: '/admin/licenses' },
   { label: 'Releases',  icon: <CloudUploadIcon />, path: '/admin/releases' },
   { label: 'Sessions',  icon: <SensorsIcon />,     path: '/admin/sessions' },
+  { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
 ];
 
@@ -56,7 +58,7 @@ export default function AdminLayout() {
       >
         <Box sx={{ p: 2 }}>
           <Typography variant="subtitle1" fontWeight={700} color="text.primary">
-            BotPortal
+            Rabbit
           </Typography>
           <Typography variant="caption" color="text.secondary">
             Admin

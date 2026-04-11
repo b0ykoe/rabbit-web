@@ -1,20 +1,32 @@
 import { useState, useEffect } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
-  TextField, Button, MenuItem, Alert,
+  TextField, Button, MenuItem, Alert, FormControl, InputLabel,
+  Select, OutlinedInput, Checkbox, ListItemText, Chip, Box,
+  FormControlLabel, Switch,
 } from '@mui/material';
+
+const CHANNELS = ['release', 'beta', 'alpha'];
 
 export default function UserFormDialog({ open, onClose, onSubmit, user = null }) {
   const isEdit = !!user;
-  const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user' });
+  const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (user) {
-      setForm({ name: user.name, email: user.email, password: '', role: user.role });
+      setForm({
+        name: user.name,
+        email: user.email,
+        password: '',
+        role: user.role,
+        allowed_channels: user.allowed_channels || ['release'],
+        status: user.status || '',
+        hwid_reset_enabled: user.hwid_reset_enabled ?? true,
+      });
     } else {
-      setForm({ name: '', email: '', password: '', role: 'user' });
+      setForm({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true });
     }
     setError('');
   }, [user, open]);
@@ -58,6 +70,44 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
             <MenuItem value="admin">Admin</MenuItem>
             <MenuItem value="user">User</MenuItem>
           </TextField>
+          <FormControl size="small">
+            <InputLabel>Version Channels</InputLabel>
+            <Select
+              multiple
+              value={form.allowed_channels}
+              onChange={(e) => setForm({ ...form, allowed_channels: e.target.value })}
+              input={<OutlinedInput label="Version Channels" />}
+              renderValue={(selected) => (
+                <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                  {selected.map(ch => <Chip key={ch} label={ch} size="small" />)}
+                </Box>
+              )}
+            >
+              {CHANNELS.map((ch) => (
+                <MenuItem key={ch} value={ch}>
+                  <Checkbox checked={form.allowed_channels.includes(ch)} size="small" />
+                  <ListItemText primary={ch} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <TextField
+            label="Status (optional)"
+            size="small"
+            placeholder="e.g. VIP, Beta Tester, Banned..."
+            value={form.status}
+            onChange={(e) => setForm({ ...form, status: e.target.value })}
+          />
+          <FormControlLabel
+            control={
+              <Switch
+                checked={form.hwid_reset_enabled}
+                onChange={(e) => setForm({ ...form, hwid_reset_enabled: e.target.checked })}
+                size="small"
+              />
+            }
+            label="Allow HWID Reset"
+          />
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
