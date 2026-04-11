@@ -1,0 +1,42 @@
+# Dependencies (matches at any depth: root, server/, client/)
+node_modules/
+
+# Build output
+client/dist/
+
+# Environment (contains DB creds, Ed25519 keys)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# JetBrains / WebStorm / Rider
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code
+.vscode/
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Uploaded releases (binary files — never commit)
+private/
+
+# Multer temp uploads
+_tmp/
+
+# Knex migration lock
+*.sqlite

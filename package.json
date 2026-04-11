@@ -1,0 +1,18 @@
+{
+  "name": "bot-portal",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && node --watch src/index.js",
+    "dev:client": "cd client && npx vite",
+    "build": "cd client && npm run build",
+    "start": "cd server && node src/index.js",
+    "migrate": "cd server && npx knex migrate:latest",
+    "migrate:rollback": "cd server && npx knex migrate:rollback",
+    "seed": "cd server && npx knex seed:run",
+    "keygen": "cd server && node cli/keygen.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
