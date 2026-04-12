@@ -4,7 +4,6 @@ import { validateBotUserToken } from '../middleware/botToken.js';
 
 const router = Router();
 
-// Resolve user_id from user token (Authorization header) or session_id
 async function resolveUserId(req) {
   if (req.botUser?.id) return req.botUser.id;
   const sessionId = req.query?.session_id || req.body?.session_id;
@@ -24,33 +23,34 @@ async function optionalUserToken(req, res, next) {
   next();
 }
 
-// ── GET config by type ───────────────────────────────────────────────────────
+// Use empty string for global/hwid (MySQL NULL breaks unique constraints)
+function resolveCharName(configType, req) {
+  if (configType === 'character') return req.query?.name || req.body?.name || null;
+  return ''; // global and hwid use empty string
+}
+
+// ── GET: load or auto-create ─────────────────────────────────────────────────
 
 async function getConfig(req, res, configType) {
   const userId = await resolveUserId(req);
   if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-  const charName = configType === 'character' ? (req.query.name || null) : null;
+  const charName = resolveCharName(configType, req);
   if (configType === 'character' && !charName) {
     return res.status(400).json({ error: 'Missing name parameter' });
   }
 
-  const query = { user_id: userId, config_type: configType };
-  if (charName) query.char_name = charName;
-  else query.char_name = null; // explicit null for global/hwid
+  let row = await db('bot_configs')
+    .where({ user_id: userId, config_type: configType, char_name: charName })
+    .first();
 
-  // For MySQL: NULL comparison needs IS NULL
-  let row;
-  if (charName) {
-    row = await db('bot_configs').where(query).first();
-  } else {
-    row = await db('bot_configs')
-      .where({ user_id: userId, config_type: configType })
-      .whereNull('char_name')
-      .first();
+  // Auto-create empty config if not found
+  if (!row) {
+    await db('bot_configs').insert({
+      user_id: userId, config_type: configType, char_name: charName, config_json: '{}',
+    });
+    return res.json({ config: {} });
   }
-
-  if (!row) return res.status(404).json({ error: 'No config found' });
 
   try {
     res.json({ config: JSON.parse(row.config_json) });
@@ -59,7 +59,7 @@ async function getConfig(req, res, configType) {
   }
 }
 
-// ── PUT config by type ───────────────────────────────────────────────────────
+// ── PUT/POST: save (upsert) ──────────────────────────────────────────────────
 
 async function putConfig(req, res, configType) {
   const userId = await resolveUserId(req);
@@ -70,35 +70,20 @@ async function putConfig(req, res, configType) {
     return res.status(400).json({ error: 'Missing config object' });
   }
 
-  const charName = configType === 'character' ? (req.body.name || null) : null;
+  const charName = resolveCharName(configType, req);
   if (configType === 'character' && !charName) {
     return res.status(400).json({ error: 'Missing name field' });
   }
 
   const configJson = JSON.stringify(config);
+  const where = { user_id: userId, config_type: configType, char_name: charName };
 
-  let existing;
-  if (charName) {
-    existing = await db('bot_configs')
-      .where({ user_id: userId, config_type: configType, char_name: charName })
-      .first();
-  } else {
-    existing = await db('bot_configs')
-      .where({ user_id: userId, config_type: configType })
-      .whereNull('char_name')
-      .first();
-  }
-
+  const existing = await db('bot_configs').where(where).first();
   if (existing) {
     await db('bot_configs').where('id', existing.id)
       .update({ config_json: configJson, updated_at: db.fn.now() });
   } else {
-    await db('bot_configs').insert({
-      user_id: userId,
-      config_type: configType,
-      char_name: charName,
-      config_json: configJson,
-    });
+    await db('bot_configs').insert({ ...where, config_json: configJson });
   }
 
   res.json({ ok: true });
