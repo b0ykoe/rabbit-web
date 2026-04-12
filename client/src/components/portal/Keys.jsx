@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Typography, Paper, Chip, TextField, Button, Divider } from '@mui/material';
+import { Box, Typography, Paper, Chip, TextField, Button, Divider, IconButton } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import RedeemIcon from '@mui/icons-material/Redeem';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
 import StatusBadge from '../common/StatusBadge.jsx';
 import ExpiryBadge from '../common/ExpiryBadge.jsx';
 import CopyableText from '../common/CopyableText.jsx';
@@ -32,6 +33,7 @@ export default function Keys() {
   const [redeemKey, setRedeemKey]       = useState('');
   const [redeeming, setRedeeming]       = useState(false);
   const [resetHwidKey, setResetHwidKey] = useState(null);
+  const [killSessionId, setKillSessionId] = useState(null);
 
   const handleRedeem = async () => {
     if (!redeemKey.trim()) return;
@@ -45,6 +47,17 @@ export default function Keys() {
       showSnackbar(err.data?.error || 'Failed to redeem key', 'error');
     } finally {
       setRedeeming(false);
+    }
+  };
+
+  const handleKillSession = async () => {
+    try {
+      await portalApi.killSession(killSessionId);
+      showSnackbar('Session terminated');
+      setKillSessionId(null);
+      refetch();
+    } catch (err) {
+      showSnackbar(err.data?.error || 'Failed to kill session', 'error');
     }
   };
 
@@ -146,41 +159,54 @@ export default function Keys() {
                   </Typography>
                 </Box>
                 {lic.liveSessions.map((s) => (
-                  <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 0.5, flexWrap: 'wrap' }}>
+                  <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5, flexWrap: 'wrap' }}>
+                    <Typography variant="caption" fontFamily="monospace" color="text.secondary" sx={{ minWidth: 180 }}>
+                      {s.session_id.slice(0, 16)}...
+                    </Typography>
                     <Typography variant="caption" fontFamily="monospace" color="text.secondary">
                       HWID: {s.hwid || 'N/A'}
                     </Typography>
                     <Typography variant="caption" color="text.disabled">
                       started {timeAgo(s.started_at)} · runtime {formatDuration(now - s.started_at)}
                     </Typography>
-                    <Chip label={`idle ${now - s.last_heartbeat}s`} size="small" color="success" variant="outlined" sx={{ ml: 'auto' }} />
+                    <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Chip label={`idle ${now - s.last_heartbeat}s`} size="small" color="success" variant="outlined" />
+                      <IconButton size="small" color="error" onClick={() => setKillSessionId(s.session_id)} title="Kill session">
+                        <StopCircleIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
                   </Box>
                 ))}
               </Box>
             </>
           )}
 
-          {/* Stale Sessions */}
-          {lic.staleSessions?.length > 0 && (
+          {/* Session History (archived) */}
+          {lic.archivedSessions?.length > 0 && (
             <>
               <Divider />
               <Box sx={{ px: 2.5, py: 1.5 }}>
                 <Typography variant="caption" color="text.disabled" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, mb: 0.5, display: 'block' }}>
-                  Recent Sessions
+                  Session History
                 </Typography>
-                {lic.staleSessions.slice(0, 5).map((s) => (
-                  <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 0.5 }}>
+                {lic.archivedSessions.slice(0, 5).map((s) => (
+                  <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5 }}>
                     <Typography variant="caption" fontFamily="monospace" color="text.disabled">
-                      {s.hwid || s.session_id.slice(0, 24) + '...'}
+                      {s.session_id.slice(0, 12)}...
                     </Typography>
+                    <Typography variant="caption" fontFamily="monospace" color="text.disabled">
+                      {s.hwid || 'no HWID'}
+                    </Typography>
+                    <Chip label={s.end_reason || 'ended'} size="small" variant="outlined"
+                      sx={{ height: 18, fontSize: '0.65rem', opacity: 0.7 }} />
                     <Typography variant="caption" color="text.disabled" sx={{ ml: 'auto' }}>
-                      {timeAgo(s.last_heartbeat)}
+                      {timeAgo(s.ended_at)}
                     </Typography>
                   </Box>
                 ))}
-                {lic.staleSessions.length > 5 && (
+                {lic.archivedSessions.length > 5 && (
                   <Typography variant="caption" color="text.disabled">
-                    + {lic.staleSessions.length - 5} older session(s)
+                    + {lic.archivedSessions.length - 5} older session(s)
                   </Typography>
                 )}
               </Box>
@@ -206,6 +232,16 @@ export default function Keys() {
         onCancel={() => setResetHwidKey(null)}
         confirmText="Reset HWID"
         color="warning"
+      />
+
+      <ConfirmDialog
+        open={!!killSessionId}
+        title="Kill Session"
+        message={`Terminate session ${killSessionId?.slice(0, 16)}...? The bot will lose connection on the next heartbeat.`}
+        onConfirm={handleKillSession}
+        onCancel={() => setKillSessionId(null)}
+        confirmText="Kill"
+        color="error"
       />
     </Box>
   );

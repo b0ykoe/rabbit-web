@@ -1,7 +1,27 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { archiveSession } from '../services/licenseService.js';
 
 const router = Router();
+
+// DELETE /api/portal/keys/:sessionId — user kills their own session
+router.delete('/:sessionId', async (req, res) => {
+  const userId = req.session.user.id;
+  const { sessionId } = req.params;
+
+  // Verify session belongs to one of the user's keys
+  const session = await db('bot_sessions')
+    .where('bot_sessions.session_id', sessionId)
+    .join('licenses', 'bot_sessions.license_key', 'licenses.license_key')
+    .where('licenses.user_id', userId)
+    .select('bot_sessions.session_id')
+    .first();
+
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  await archiveSession(db, sessionId, 'user_kill');
+  res.json({ ok: true });
+});
 
 // GET /api/portal/keys — user's keys with all sessions
 router.get('/', async (req, res) => {
@@ -13,18 +33,27 @@ router.get('/', async (req, res) => {
     .select('license_key', 'max_sessions', 'active', 'note', 'expires_at', 'bound_hwid');
 
   const keys = licenses.map(l => l.license_key);
-  let allSessions = [];
+  let activeSessions = [];
+  let archivedSessions = [];
   if (keys.length) {
-    allSessions = await db('bot_sessions')
+    activeSessions = await db('bot_sessions')
       .whereIn('license_key', keys)
+      .where('active', true)
       .orderBy('last_heartbeat', 'desc')
       .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat');
+
+    archivedSessions = await db('bot_sessions')
+      .whereIn('license_key', keys)
+      .where('active', false)
+      .orderBy('ended_at', 'desc')
+      .limit(20)
+      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat', 'ended_at', 'end_reason');
   }
 
   for (const lic of licenses) {
-    const sessions = allSessions.filter(s => s.license_key === lic.license_key);
-    lic.liveSessions  = sessions.filter(s => s.last_heartbeat > cutoff);
-    lic.staleSessions = sessions.filter(s => s.last_heartbeat <= cutoff);
+    lic.liveSessions     = activeSessions.filter(s => s.license_key === lic.license_key && s.last_heartbeat > cutoff);
+    lic.staleSessions    = activeSessions.filter(s => s.license_key === lic.license_key && s.last_heartbeat <= cutoff);
+    lic.archivedSessions = archivedSessions.filter(s => s.license_key === lic.license_key);
   }
 
   res.json({ licenses });

@@ -39,7 +39,8 @@ export const adminApi = {
   resetLicenseHwid:  (key)        => apiFetch(`/api/admin/licenses/${key}/reset-hwid`, { method: 'PATCH' }),
 
   // Sessions
-  getSessions: (page = 1) => apiFetch(`/api/admin/sessions?page=${page}`),
+  getSessions:  (page = 1, status = 'active') => apiFetch(`/api/admin/sessions?page=${page}&status=${status}`),
+  killSession:  (id)       => apiFetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // Global Statuses (no delete — archive only)
   getStatuses:    ()          => apiFetch('/api/admin/statuses'),
@@ -58,6 +59,7 @@ export const adminApi = {
 export const portalApi = {
   getDashboard: () => apiFetch('/api/portal/dashboard'),
   getKeys:      () => apiFetch('/api/portal/keys'),
+  killSession:  (id) => apiFetch(`/api/portal/keys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   redeemKey:    (data) => apiFetch('/api/portal/redeem', { method: 'POST', body: JSON.stringify(data) }),
   getShop:      () => apiFetch('/api/portal/shop'),
   purchase:     (data) => apiFetch('/api/portal/shop/purchase', { method: 'POST', body: JSON.stringify(data) }),

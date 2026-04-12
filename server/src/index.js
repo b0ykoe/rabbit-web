@@ -10,6 +10,11 @@ import { sessionMiddleware } from './middleware/session.js';
 import { verifyCsrf, setCsrfCookie } from './middleware/csrf.js';
 import { requireAuth, requireAdmin, checkForcePasswordChange } from './middleware/auth.js';
 import { startSessionCleanup } from './services/sessionCleanup.js';
+import {
+  botLoginLimiter, botAuthStartLimiter, botHeartbeatLimiter, botEndLimiter,
+  botDownloadLimiter, botInfoLimiter,
+  webAuthLimiter, adminLimiter, portalLimiter,
+} from './middleware/rateLimiter.js';
 
 // Routes
 import authRoutes           from './routes/auth.js';
@@ -49,6 +54,22 @@ if (!config.isProd) {
 app.use('/api/auth',   sessionMiddleware);
 app.use('/api/admin',  sessionMiddleware);
 app.use('/api/portal', sessionMiddleware);
+
+// ── Rate Limiting ────────────────────────────────────────────────────────────
+
+// Bot API (must be before route handlers)
+app.use('/api/bot/auth/login',     botLoginLimiter);
+app.use('/api/bot/auth/start',     botAuthStartLimiter);
+app.use('/api/bot/auth/heartbeat', botHeartbeatLimiter);
+app.use('/api/bot/auth/end',       botEndLimiter);
+app.use('/api/bot/download',       botDownloadLimiter);
+app.use('/api/bot/version',        botInfoLimiter);
+app.use('/api/bot/changelog',      botInfoLimiter);
+
+// Web (applied before session/CSRF so rate limit rejects early)
+app.use('/api/auth',               webAuthLimiter);
+app.use('/api/admin',              adminLimiter);
+app.use('/api/portal',             portalLimiter);
 
 // ── Bot API Routes (stateless, no session/CSRF) ─────────────────────────────
 

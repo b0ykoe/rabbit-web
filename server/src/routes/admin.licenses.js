@@ -175,8 +175,9 @@ router.patch('/:key/reset-hwid', async (req, res) => {
   if (!lic.bound_hwid) return res.json({ message: 'No HWID bound' });
 
   await db('licenses').where('license_key', key).update({ bound_hwid: null });
-  // Also kill active sessions for this key so the new HWID can connect
-  await db('bot_sessions').where('license_key', key).del();
+  // Archive active sessions for this key so the new HWID can connect
+  const { archiveSessionsByKey } = await import('../services/licenseService.js');
+  await archiveSessionsByKey(db, key, 'hwid_reset');
 
   await recordAudit(db, req, {
     action: 'license.reset_hwid', subjectType: 'license', subjectId: key,

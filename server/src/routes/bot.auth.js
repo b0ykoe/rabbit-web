@@ -1,11 +1,96 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import db from '../db.js';
 import { config } from '../config.js';
-import { signToken } from '../crypto/ed25519.js';
-import { hasAvailableSlot } from '../services/licenseService.js';
-import { validate, botAuthStartSchema, botHeartbeatSchema } from '../validation/schemas.js';
+import { signToken, parseTokenPayload } from '../crypto/ed25519.js';
+import { hasAvailableSlot, archiveSession } from '../services/licenseService.js';
+import { validateBotUserToken } from '../middleware/botToken.js';
+import { validate, botLoginSchema, botAuthStartSchema, botHeartbeatSchema } from '../validation/schemas.js';
 
 const router = Router();
+
+// ── Helper: load user's licenses with live sessions ─────────────────────────
+async function loadUserLicenses(userId) {
+  const cutoff = Math.floor(Date.now() / 1000) - 90;
+
+  const licenses = await db('licenses')
+    .where('user_id', userId)
+    .select('license_key', 'max_sessions', 'active', 'note', 'expires_at', 'bound_hwid');
+
+  const keys = licenses.map(l => l.license_key);
+  let allSessions = [];
+  if (keys.length) {
+    allSessions = await db('bot_sessions')
+      .whereIn('license_key', keys)
+      .where('active', true)
+      .where('last_heartbeat', '>', cutoff)
+      .orderBy('last_heartbeat', 'desc')
+      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat');
+  }
+
+  return licenses.map(lic => ({
+    ...lic,
+    live_sessions: allSessions.filter(s => s.license_key === lic.license_key),
+  }));
+}
+
+// POST /api/bot/login — authenticate user, return user token + keys
+router.post('/login', validate(botLoginSchema), async (req, res) => {
+  const { email, password } = req.validated;
+
+  const user = await db('users').where('email', email).first();
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  await db('users').where('id', user.id).update({ last_login_at: db.fn.now() });
+
+  const now = Math.floor(Date.now() / 1000);
+  const userToken = await signToken({
+    user_id: user.id,
+    type:    'user',
+    exp:     now + 3600,
+    iat:     now,
+    ver:     1,
+  }, config.bot.ed25519PrivateKey);
+
+  const channels = user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'];
+  const licenses = await loadUserLicenses(user.id);
+
+  res.json({
+    user_token: userToken,
+    user: {
+      id:               user.id,
+      name:             user.name,
+      email:            user.email,
+      allowed_channels: channels,
+      credits:          user.credits || 0,
+    },
+    licenses,
+  });
+});
+
+// GET /api/bot/keys — refresh user's keys with live sessions (requires user token)
+router.get('/keys', validateBotUserToken, async (req, res) => {
+  const licenses = await loadUserLicenses(req.botUser.id);
+  res.json({ licenses });
+});
+
+// POST /api/bot/auth/redeem — claim an unassigned key (requires user token)
+router.post('/redeem', validateBotUserToken, async (req, res) => {
+  const key = req.body?.key;
+  if (!key) return res.status(400).json({ error: 'Missing key' });
+
+  const license = await db('licenses').where('license_key', key).first();
+  if (!license)        return res.status(404).json({ error: 'Key not found' });
+  if (!license.active) return res.status(422).json({ error: 'Key has been revoked' });
+  if (license.user_id) return res.status(422).json({ error: 'Key is already claimed' });
+  if (license.expires_at && new Date(license.expires_at) < new Date())
+    return res.status(422).json({ error: 'Key has expired' });
+
+  await db('licenses').where('license_key', key).update({ user_id: req.botUser.id });
+  res.json({ ok: true, license_key: key });
+});
 
 // POST /api/bot/auth/start — validate key, create session, issue signed token
 router.post('/start', validate(botAuthStartSchema), async (req, res) => {
@@ -65,25 +150,43 @@ router.post('/start', validate(botAuthStartSchema), async (req, res) => {
   res.json({ token });
 });
 
-// POST /api/bot/auth/heartbeat — update last_heartbeat
+// POST /api/bot/auth/heartbeat — update last_heartbeat + optional token refresh
 router.post('/heartbeat', validate(botHeartbeatSchema), async (req, res) => {
-  const { session_id } = req.validated;
-  const session = await db('bot_sessions').where('session_id', session_id).first();
+  const { session_id, token } = req.validated;
+  const session = await db('bot_sessions').where({ session_id, active: true }).first();
   if (!session) {
     return res.status(401).json({ error: 'Session not found' });
   }
 
+  const now = Math.floor(Date.now() / 1000);
   await db('bot_sessions').where('session_id', session_id).update({
-    last_heartbeat: Math.floor(Date.now() / 1000),
+    last_heartbeat: now,
   });
-  res.json({ ok: true });
+
+  // Token refresh: if token provided and expires within 5 minutes, issue a new one
+  const result = { ok: true };
+  if (token) {
+    const payload = parseTokenPayload(token);
+    if (payload?.exp && (payload.exp - now) < 300) {
+      const newPayload = {
+        key:        session.license_key,
+        session_id,
+        exp:        now + 3600,
+        iat:        now,
+        ver:        1,
+      };
+      result.token = await signToken(newPayload, config.bot.ed25519PrivateKey);
+    }
+  }
+
+  res.json(result);
 });
 
-// POST /api/bot/auth/end — delete session (idempotent)
+// POST /api/bot/auth/end — archive session (idempotent)
 router.post('/end', async (req, res) => {
   const sid = req.body?.session_id;
   if (sid) {
-    await db('bot_sessions').where('session_id', sid).del();
+    await archiveSession(db, sid, 'user_end');
   }
   res.json({ ok: true });
 });

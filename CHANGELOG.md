@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.8.0] - 2026-04-12
+
+### Added
+- **Session archiving** — sessions are never deleted, only archived (`active=false`) with `ended_at` timestamp and `end_reason` (heartbeat_timeout, user_end, admin_kill, user_kill, hwid_reset)
+- **Session kill** — admin and portal users can terminate active sessions. Admin: `DELETE /api/admin/sessions/:id`. Portal: `DELETE /api/portal/keys/:id` (own sessions only)
+- **Session history** — portal keys page shows archived sessions with end reason and timestamp. Admin sessions page has Active/Archived/All toggle filter
+
+### New Files
+- `server/migrations/011_session_archive.js`
+
+### Changed
+- All session deletion operations replaced with archiving across: bot auth/end, session cleanup, admin kill, portal kill, HWID reset
+- Session slot counting and heartbeat validation now filter by `active=true`
+- Admin sessions table shows end_reason, runtime, ended-at for archived sessions. Kill button only on active
+- Portal keys shows "Session History" section with archived sessions per key
+
+## [0.7.0] - 2026-04-12
+
+### Added
+- **Bot user login** (`POST /api/bot/auth/login`) — stateless login with email+password for C++ loader. Returns Ed25519-signed user token + user data + license keys with live sessions.
+- **Bot keys endpoint** (`GET /api/bot/keys`) — refresh user's license keys with live sessions. Requires user token via `Authorization: Bearer` header.
+- **User token middleware** (`validateBotUserToken`) — verifies Ed25519-signed user tokens (type=user) from Authorization header, loads user from DB.
+
+### Changed
+- **Bot version endpoint** (`GET /api/bot/version`) — now requires user token, only returns versions for user's allowed channels
+- **Bot changelog endpoint** (`GET /api/bot/changelog`) — now requires user token, filters releases by user's allowed channels
+- **Bot download** — channel parameter support in download requests, response includes version + channel
+
+## [0.6.0] - 2026-04-12
+
+### Added
+- **Rate limiting** — tiered per-endpoint rate limits using `express-rate-limit`. Bot auth start (10/min), heartbeat (200/min), downloads (10/min), web auth (10/min), admin (100/min), portal (60/min). All per-IP for bot API, per-session for web routes.
+- **Token refresh via heartbeat** — bot can optionally send its token with heartbeat requests. If the token expires within 5 minutes, the server automatically issues a fresh token in the response. Fully backwards-compatible (token field is optional).
+
+### New Files
+- `server/src/middleware/rateLimiter.js`
+
+### Changed
+- `server/src/index.js` — rate limiters applied before all route handlers
+- `server/src/crypto/ed25519.js` — added `parseTokenPayload()` for reading token payload without signature verification
+- `server/src/validation/schemas.js` — `botHeartbeatSchema` now accepts optional `token` field
+- `server/src/routes/bot.auth.js` — heartbeat endpoint supports token refresh
+
 ## [0.5.0] - 2026-04-12
 
 ### Added

@@ -101,6 +101,11 @@ export const resetHwidSchema = z.object({
 
 // ── Bot API ──────────────────────────────────────────────────────────────────
 
+export const botLoginSchema = z.object({
+  email:    z.string().email(),
+  password: z.string().min(1),
+});
+
 export const botAuthStartSchema = z.object({
   key:        z.string().min(1),
   session_id: z.string().min(1).max(64),
@@ -109,6 +114,7 @@ export const botAuthStartSchema = z.object({
 
 export const botHeartbeatSchema = z.object({
   session_id: z.string().min(1),
+  token:      z.string().optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

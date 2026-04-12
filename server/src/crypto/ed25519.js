@@ -40,6 +40,26 @@ export async function signToken(payload, privKeyHex) {
 }
 
 /**
+ * Parse token payload WITHOUT signature verification or expiry check.
+ * Used for token refresh where we need to read exp from a near-expired token.
+ * @param {string} tokenB64 - base64-encoded token
+ * @returns {object|null} decoded payload, or null if malformed
+ */
+export function parseTokenPayload(tokenB64) {
+  let raw;
+  try { raw = Buffer.from(tokenB64, 'base64'); } catch { return null; }
+  if (raw.length < 5) return null;
+
+  const payloadLen = raw.readUInt32LE(0);
+  if (payloadLen <= 0 || payloadLen > 4096) return null;
+  if (raw.length < 4 + payloadLen + 64) return null;
+
+  try {
+    return JSON.parse(raw.subarray(4, 4 + payloadLen).toString('utf8'));
+  } catch { return null; }
+}
+
+/**
  * Verify and decode a base64-encoded signed token.
  * @param {string} tokenB64 - base64-encoded token
  * @param {string} pubKeyHex - 64-char hex string (32-byte public key)

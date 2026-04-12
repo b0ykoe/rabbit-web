@@ -1,7 +1,23 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { recordAudit } from '../services/auditLog.js';
+import { archiveSession } from '../services/licenseService.js';
 
 const router = Router();
+
+// DELETE /api/admin/sessions/:sessionId — kill (archive) a bot session
+router.delete('/:sessionId', async (req, res) => {
+  const { sessionId } = req.params;
+  const session = await db('bot_sessions').where('session_id', sessionId).where('active', true).first();
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  await archiveSession(db, sessionId, 'admin_kill');
+  await recordAudit(db, req, {
+    action: 'session.kill', subjectType: 'session', subjectId: sessionId,
+    oldValues: { license_key: session.license_key, hwid: session.hwid },
+  });
+  res.json({ ok: true });
+});
 
 // GET /api/admin/sessions — paginated list with license + user info
 router.get('/', async (req, res) => {
@@ -10,30 +26,41 @@ router.get('/', async (req, res) => {
   const offset = (page - 1) * limit;
   const cutoff = Math.floor(Date.now() / 1000) - 90;
 
+  // Filter: ?status=active (default) or ?status=archived or ?status=all
+  const statusFilter = req.query.status || 'active';
+
+  let query = db('bot_sessions')
+    .join('licenses', 'bot_sessions.license_key', 'licenses.license_key')
+    .leftJoin('users', 'licenses.user_id', 'users.id')
+    .select(
+      'bot_sessions.session_id',
+      'bot_sessions.license_key',
+      'bot_sessions.hwid',
+      'bot_sessions.started_at',
+      'bot_sessions.last_heartbeat',
+      'bot_sessions.active',
+      'bot_sessions.ended_at',
+      'bot_sessions.end_reason',
+      'users.name as user_name',
+      'users.email as user_email',
+    );
+
+  if (statusFilter === 'active')   query = query.where('bot_sessions.active', true);
+  if (statusFilter === 'archived') query = query.where('bot_sessions.active', false);
+
+  let countQuery = db('bot_sessions');
+  if (statusFilter === 'active')   countQuery = countQuery.where('active', true);
+  if (statusFilter === 'archived') countQuery = countQuery.where('active', false);
+
   const [rows, countResult] = await Promise.all([
-    db('bot_sessions')
-      .join('licenses', 'bot_sessions.license_key', 'licenses.license_key')
-      .leftJoin('users', 'licenses.user_id', 'users.id')
-      .select(
-        'bot_sessions.session_id',
-        'bot_sessions.license_key',
-        'bot_sessions.hwid',
-        'bot_sessions.started_at',
-        'bot_sessions.last_heartbeat',
-        'users.name as user_name',
-        'users.email as user_email',
-      )
-      .orderBy('bot_sessions.last_heartbeat', 'desc')
-      .limit(limit)
-      .offset(offset),
-    db('bot_sessions').count('* as total').first(),
+    query.orderBy('bot_sessions.last_heartbeat', 'desc').limit(limit).offset(offset),
+    countQuery.count('* as total').first(),
   ]);
 
-  // Annotate each session with idle_seconds and is_alive
   const now = Math.floor(Date.now() / 1000);
   for (const row of rows) {
     row.idle_seconds = now - row.last_heartbeat;
-    row.is_alive = row.last_heartbeat > cutoff;
+    row.is_alive = row.active && row.last_heartbeat > cutoff;
   }
 
   res.json({

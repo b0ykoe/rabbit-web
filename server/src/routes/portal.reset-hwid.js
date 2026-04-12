@@ -27,8 +27,9 @@ router.post('/', validate(resetHwidSchema), async (req, res) => {
   }
 
   await db('licenses').where('license_key', license_key).update({ bound_hwid: null });
-  // Kill active sessions so new HWID can connect
-  await db('bot_sessions').where('license_key', license_key).del();
+  // Archive active sessions so new HWID can connect
+  const { archiveSessionsByKey } = await import('../services/licenseService.js');
+  await archiveSessionsByKey(db, license_key, 'hwid_reset');
 
   await recordAudit(db, req, {
     action: 'license.reset_hwid', subjectType: 'license', subjectId: license_key,

@@ -1,43 +1,112 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Chip } from '@mui/material';
+import { Box, Typography, Chip, IconButton, Tooltip, ToggleButtonGroup, ToggleButton } from '@mui/material';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
 import DataTable from '../common/DataTable.jsx';
 import StatusBadge from '../common/StatusBadge.jsx';
 import CopyableText from '../common/CopyableText.jsx';
+import ConfirmDialog from '../common/ConfirmDialog.jsx';
 import { adminApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
+import { useSnackbar } from '../../context/SnackbarContext.jsx';
+import { formatDuration } from '../../utils/format.js';
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const s = Math.floor(Date.now() / 1000) - ts;
+  if (s < 60)   return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  return `${Math.floor(s / 3600)}h ago`;
+}
 
 export default function Sessions() {
   const [page, setPage] = useState(1);
-  const { data, loading, refetch } = useApi(() => adminApi.getSessions(page), [page]);
+  const [statusFilter, setStatusFilter] = useState('active');
+  const { data, loading, refetch } = useApi(() => adminApi.getSessions(page, statusFilter), [page, statusFilter]);
+  const { showSnackbar } = useSnackbar();
+  const [killTarget, setKillTarget] = useState(null);
 
-  // Auto-refresh every 5 seconds
   useEffect(() => {
     const interval = setInterval(refetch, 5000);
     return () => clearInterval(interval);
   }, [refetch]);
 
+  const handleKill = async () => {
+    if (!killTarget) return;
+    try {
+      await adminApi.killSession(killTarget);
+      showSnackbar('Session terminated');
+      setKillTarget(null);
+      refetch();
+    } catch (err) {
+      showSnackbar(err.data?.error || 'Failed to kill session', 'error');
+    }
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+
   const columns = [
     {
-      id: 'session_id', label: 'Session',
-      render: (row) => <Typography variant="caption" fontFamily="monospace">{row.session_id.slice(0, 20)}...</Typography>,
+      id: 'session_id', label: 'Session ID',
+      render: (row) => <CopyableText text={row.session_id} />,
     },
     { id: 'license_key', label: 'Key', render: (row) => <CopyableText text={row.license_key} /> },
-    { id: 'hwid', label: 'HWID', render: (row) => <Typography variant="caption" fontFamily="monospace" color="text.secondary">{row.hwid || 'N/A'}</Typography> },
-    { id: 'user', label: 'User', render: (row) => row.user_name || <Typography variant="caption" color="text.disabled">unassigned</Typography> },
     {
-      id: 'status', label: 'Status',
-      render: (row) => <StatusBadge status={row.is_alive ? 'live' : 'stale'} />,
+      id: 'hwid', label: 'HWID',
+      render: (row) => (
+        <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+          {row.hwid || 'N/A'}
+        </Typography>
+      ),
     },
     {
-      id: 'idle', label: 'Idle', align: 'right',
+      id: 'user', label: 'User',
+      render: (row) => row.user_name
+        ? <Tooltip title={row.user_email}><Typography variant="body2">{row.user_name}</Typography></Tooltip>
+        : <Typography variant="caption" color="text.disabled">unassigned</Typography>,
+    },
+    {
+      id: 'runtime', label: 'Runtime',
       render: (row) => (
-        <Chip
-          label={`${row.idle_seconds}s`}
-          size="small"
-          variant="outlined"
-          color={row.idle_seconds < 30 ? 'success' : row.idle_seconds < 60 ? 'warning' : 'error'}
-        />
+        <Typography variant="caption" color="text.secondary">
+          {formatDuration((row.ended_at || now) - row.started_at)}
+        </Typography>
       ),
+    },
+    {
+      id: 'status', label: 'Status',
+      render: (row) => {
+        if (!row.active) {
+          const reasonColors = { admin_kill: 'error', user_kill: 'warning', user_end: 'info', heartbeat_timeout: 'default', hwid_reset: 'warning' };
+          return <Chip label={row.end_reason || 'ended'} size="small" variant="outlined" color={reasonColors[row.end_reason] || 'default'} />;
+        }
+        return <StatusBadge status={row.is_alive ? 'live' : 'stale'} />;
+      },
+    },
+    {
+      id: 'idle', label: 'Idle / Ended', align: 'right',
+      render: (row) => {
+        if (!row.active) {
+          return <Typography variant="caption" color="text.disabled">{timeAgo(row.ended_at)}</Typography>;
+        }
+        return (
+          <Chip
+            label={`${row.idle_seconds}s`}
+            size="small"
+            variant="outlined"
+            color={row.idle_seconds < 30 ? 'success' : row.idle_seconds < 60 ? 'warning' : 'error'}
+          />
+        );
+      },
+    },
+    {
+      id: 'actions', label: '', align: 'right',
+      render: (row) => row.active ? (
+        <Tooltip title="Kill session">
+          <IconButton size="small" color="error" onClick={() => setKillTarget(row.session_id)}>
+            <StopCircleIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      ) : null,
     },
   ];
 
@@ -45,7 +114,16 @@ export default function Sessions() {
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h6" fontWeight={600}>Bot Sessions</Typography>
-        <Typography variant="caption" color="text.disabled">Auto-refreshing every 5s</Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <ToggleButtonGroup size="small" value={statusFilter} exclusive onChange={(_, v) => { if (v) { setStatusFilter(v); setPage(1); } }}>
+            <ToggleButton value="active">Active</ToggleButton>
+            <ToggleButton value="archived">Archived</ToggleButton>
+            <ToggleButton value="all">All</ToggleButton>
+          </ToggleButtonGroup>
+          <Typography variant="caption" color="text.disabled">
+            {data?.total || 0} session(s) &middot; auto-refresh 5s
+          </Typography>
+        </Box>
       </Box>
 
       <DataTable
@@ -58,6 +136,16 @@ export default function Sessions() {
         onPageChange={setPage}
         rowsPerPage={50}
         rowKey="session_id"
+      />
+
+      <ConfirmDialog
+        open={!!killTarget}
+        title="Kill Session"
+        message={`Terminate session ${killTarget?.slice(0, 16)}...? The bot will disconnect on the next heartbeat.`}
+        onConfirm={handleKill}
+        onCancel={() => setKillTarget(null)}
+        confirmText="Kill"
+        color="error"
       />
     </Box>
   );
