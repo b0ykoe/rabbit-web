@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Box, Typography, Button, Chip } from '@mui/material';
+// Typography is used in column renders via MUI's auto-import
 import AddIcon from '@mui/icons-material/Add';
 import DataTable from '../common/DataTable.jsx';
 import StatusBadge from '../common/StatusBadge.jsx';
@@ -63,6 +64,18 @@ export default function Users() {
       </Box>
     )},
     { id: 'status', label: 'Status', render: (row) => row.status ? <Chip label={row.status} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} /> : <Typography variant="caption" color="text.disabled">—</Typography> },
+    { id: 'flags', label: 'Modules', render: (row) => {
+      const f = row.feature_flags || {};
+      const active = Object.entries(f).filter(([, v]) => v).map(([k]) => k);
+      const count = active.filter(k => !k.startsWith('dev')).length;
+      const devOn = f.dev;
+      return (
+        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
+          <Chip label={`${count} modules`} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+          {devOn && <Chip label="DEV" size="small" color="warning" variant="outlined" sx={{ fontSize: '0.6rem' }} />}
+        </Box>
+      );
+    }},
     { id: 'license_count', label: 'Keys', align: 'center' },
     {
       id: 'actions', label: '', align: 'right',

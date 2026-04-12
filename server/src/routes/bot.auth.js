@@ -11,7 +11,7 @@ const router = Router();
 
 // ── Helper: load user's licenses with live sessions ─────────────────────────
 async function loadUserLicenses(userId) {
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   const licenses = await db('licenses')
     .where('user_id', userId)
@@ -57,6 +57,8 @@ router.post('/login', validate(botLoginSchema), async (req, res) => {
   const channels = user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'];
   const licenses = await loadUserLicenses(user.id);
 
+  const featureFlags = user.feature_flags ? JSON.parse(user.feature_flags) : {};
+
   res.json({
     user_token: userToken,
     user: {
@@ -65,6 +67,7 @@ router.post('/login', validate(botLoginSchema), async (req, res) => {
       email:            user.email,
       allowed_channels: channels,
       credits:          user.credits || 0,
+      feature_flags:    featureFlags,
     },
     licenses,
   });
@@ -147,21 +150,31 @@ router.post('/start', validate(botAuthStartSchema), async (req, res) => {
   };
 
   const token = await signToken(payload, config.bot.ed25519PrivateKey);
-  res.json({ token });
+
+  // Include feature flags for the DLL
+  let featureFlags = {};
+  if (license.user_id) {
+    const user = await db('users').where('id', license.user_id).select('feature_flags').first();
+    if (user?.feature_flags) featureFlags = JSON.parse(user.feature_flags);
+  }
+
+  res.json({ token, feature_flags: featureFlags });
 });
 
 // POST /api/bot/auth/heartbeat — update last_heartbeat + optional token refresh
 router.post('/heartbeat', validate(botHeartbeatSchema), async (req, res) => {
-  const { session_id, token } = req.validated;
+  const { session_id, token, stats } = req.validated;
   const session = await db('bot_sessions').where({ session_id, active: true }).first();
   if (!session) {
     return res.status(401).json({ error: 'Session not found' });
   }
 
   const now = Math.floor(Date.now() / 1000);
-  await db('bot_sessions').where('session_id', session_id).update({
-    last_heartbeat: now,
-  });
+  const updateData = { last_heartbeat: now };
+  if (stats) {
+    updateData.stats_json = JSON.stringify(stats);
+  }
+  await db('bot_sessions').where('session_id', session_id).update(updateData);
 
   // Token refresh: if token provided and expires within 5 minutes, issue a new one
   const result = { ok: true };

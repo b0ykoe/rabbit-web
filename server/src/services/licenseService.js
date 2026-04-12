@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { config } from '../config.js';
 
 /**
  * Generate a license key in XXXX-XXXX-XXXX-XXXX format.
@@ -23,7 +24,7 @@ export function generateKey() {
  * @returns {Promise<boolean>}
  */
 export async function hasAvailableSlot(db, licenseKey, maxSessions) {
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
   const { count } = await db('bot_sessions')
     .where('license_key', licenseKey)
     .where('active', true)

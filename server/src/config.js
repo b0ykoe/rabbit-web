@@ -23,6 +23,7 @@ export const config = {
     ed25519PrivateKey: process.env.BOT_ED25519_PRIVATE_KEY || '',
     ed25519PublicKey:  process.env.BOT_ED25519_PUBLIC_KEY  || '',
     privateDir:       process.env.BOT_PRIVATE_DIR || './private/releases',
+    sessionTimeoutSec: 30,  // sessions without heartbeat for this long are considered dead
   },
 
   isProd: (process.env.NODE_ENV || 'development') === 'production',

@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { config } from '../config.js';
 
 const router = Router();
 
 // GET /api/admin/dashboard — aggregate stats
 router.get('/', async (req, res) => {
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   const [users, licenses, activeLicenses, liveSessions, releases, recentSessions] = await Promise.all([
     db('users').count('* as count').first(),

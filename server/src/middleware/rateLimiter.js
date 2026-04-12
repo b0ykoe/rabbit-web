@@ -25,12 +25,13 @@ const bySession = (req) =>
 // Bot API — stateless, default IP key
 export const botLoginLimiter     = createLimiter(60_000, 10);
 export const botAuthStartLimiter = createLimiter(60_000, 10);
-export const botHeartbeatLimiter = createLimiter(60_000, 200);
+export const botHeartbeatLimiter = createLimiter(60_000, 600);   // 10s interval = 6/min/session
 export const botEndLimiter       = createLimiter(60_000, 30);
 export const botDownloadLimiter  = createLimiter(60_000, 10);
 export const botInfoLimiter      = createLimiter(60_000, 30);
 
 // Web — session-aware for admin/portal, default IP for auth
+export const botConfigLimiter   = createLimiter(60_000, 30);
 export const webAuthLimiter = createLimiter(60_000, 10);
 export const adminLimiter   = createLimiter(60_000, 100, bySession);
 export const portalLimiter  = createLimiter(60_000, 60,  bySession);

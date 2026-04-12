@@ -83,6 +83,21 @@ export default function Sessions() {
       },
     },
     {
+      id: 'stats', label: 'Stats',
+      render: (row) => {
+        const s = row.stats;
+        if (!s) return <Typography variant="caption" color="text.disabled">-</Typography>;
+        return (
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            {s.kills > 0 && <Chip label={`${s.kills} kills`} size="small" variant="outlined" />}
+            {s.xp_earned > 0 && <Chip label={`${(s.xp_earned / 1000).toFixed(1)}k XP`} size="small" variant="outlined" color="primary" />}
+            {s.items_looted > 0 && <Chip label={`${s.items_looted} items`} size="small" variant="outlined" />}
+            {s.deaths > 0 && <Chip label={`${s.deaths} deaths`} size="small" variant="outlined" color="error" />}
+          </Box>
+        );
+      },
+    },
+    {
       id: 'idle', label: 'Idle / Ended', align: 'right',
       render: (row) => {
         if (!row.active) {

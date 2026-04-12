@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.9.0] - 2026-04-12
+
+### Added
+- **Session stats** — bot sends stats (kills, XP, items, deaths, runtime) with every heartbeat. Server stores latest snapshot in `stats_json` per session. Stats persist in archived sessions.
+- **Server-side config storage** — `GET/PUT /api/bot/config` endpoints for per-user, per-character bot configuration. Replaces local disk config files.
+- **Live stats in frontend** — admin sessions and portal keys display live stats (kills, XP, items, deaths) with auto-refresh.
+- **Configurable session timeout** — `config.bot.sessionTimeoutSec` (default 30s) replaces all hardcoded 90s cutoffs.
+
+### Changed
+- **Heartbeat interval** — 30s → 10s for near-real-time stats
+- **Session timeout** — 90s → 30s (3 missed heartbeats)
+- **Heartbeat rate limit** — 200/min → 600/min (matches 10s interval)
+- All 8 timeout references now use central `config.bot.sessionTimeoutSec`
+- Portal keys page auto-refreshes every 5s for live stats
+
+### New Files
+- `server/migrations/012_session_stats_and_configs.js`
+- `server/src/routes/bot.config.js`
+
 ## [0.8.0] - 2026-04-12
 
 ### Added

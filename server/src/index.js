@@ -12,7 +12,7 @@ import { requireAuth, requireAdmin, checkForcePasswordChange } from './middlewar
 import { startSessionCleanup } from './services/sessionCleanup.js';
 import {
   botLoginLimiter, botAuthStartLimiter, botHeartbeatLimiter, botEndLimiter,
-  botDownloadLimiter, botInfoLimiter,
+  botDownloadLimiter, botInfoLimiter, botConfigLimiter,
   webAuthLimiter, adminLimiter, portalLimiter,
 } from './middleware/rateLimiter.js';
 
@@ -20,6 +20,7 @@ import {
 import authRoutes           from './routes/auth.js';
 import botAuthRoutes        from './routes/bot.auth.js';
 import botDownloadRoutes    from './routes/bot.download.js';
+import botConfigRoutes      from './routes/bot.config.js';
 import adminDashboardRoutes from './routes/admin.dashboard.js';
 import adminUsersRoutes     from './routes/admin.users.js';
 import adminLicensesRoutes  from './routes/admin.licenses.js';
@@ -65,6 +66,7 @@ app.use('/api/bot/auth/end',       botEndLimiter);
 app.use('/api/bot/download',       botDownloadLimiter);
 app.use('/api/bot/version',        botInfoLimiter);
 app.use('/api/bot/changelog',      botInfoLimiter);
+app.use('/api/bot/config',         botConfigLimiter);
 
 // Web (applied before session/CSRF so rate limit rejects early)
 app.use('/api/auth',               webAuthLimiter);
@@ -74,6 +76,7 @@ app.use('/api/portal',             portalLimiter);
 // ── Bot API Routes (stateless, no session/CSRF) ─────────────────────────────
 
 app.use('/api/bot/auth',     botAuthRoutes);
+app.use('/api/bot/config',   botConfigRoutes);
 app.use('/api/bot',          botDownloadRoutes);
 
 // ── Web Auth Routes ──────────────────────────────────────────────────────────

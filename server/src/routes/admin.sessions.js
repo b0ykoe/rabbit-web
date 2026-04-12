@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { config } from '../config.js';
 import { recordAudit } from '../services/auditLog.js';
 import { archiveSession } from '../services/licenseService.js';
 
@@ -24,7 +25,7 @@ router.get('/', async (req, res) => {
   const page   = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const limit  = 50;
   const offset = (page - 1) * limit;
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   // Filter: ?status=active (default) or ?status=archived or ?status=all
   const statusFilter = req.query.status || 'active';
@@ -41,6 +42,7 @@ router.get('/', async (req, res) => {
       'bot_sessions.active',
       'bot_sessions.ended_at',
       'bot_sessions.end_reason',
+      'bot_sessions.stats_json',
       'users.name as user_name',
       'users.email as user_email',
     );
@@ -61,6 +63,8 @@ router.get('/', async (req, res) => {
   for (const row of rows) {
     row.idle_seconds = now - row.last_heartbeat;
     row.is_alive = row.active && row.last_heartbeat > cutoff;
+    try { row.stats = row.stats_json ? JSON.parse(row.stats_json) : null; } catch { row.stats = null; }
+    delete row.stats_json;
   }
 
   res.json({

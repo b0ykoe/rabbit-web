@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, Typography, Paper, Chip, TextField, Button, Divider, IconButton } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
@@ -26,6 +26,12 @@ function timeAgo(timestamp) {
 export default function Keys() {
   const { data, loading, refetch } = useApi(() => portalApi.getKeys(), []);
   const { showSnackbar } = useSnackbar();
+
+  // Auto-refresh for live stats
+  useEffect(() => {
+    const interval = setInterval(refetch, 5000);
+    return () => clearInterval(interval);
+  }, [refetch]);
   const { user } = useAuth();
   const navigate = useNavigate();
   const now = Math.floor(Date.now() / 1000);
@@ -159,22 +165,32 @@ export default function Keys() {
                   </Typography>
                 </Box>
                 {lic.liveSessions.map((s) => (
-                  <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5, flexWrap: 'wrap' }}>
-                    <Typography variant="caption" fontFamily="monospace" color="text.secondary" sx={{ minWidth: 180 }}>
-                      {s.session_id.slice(0, 16)}...
-                    </Typography>
-                    <Typography variant="caption" fontFamily="monospace" color="text.secondary">
-                      HWID: {s.hwid || 'N/A'}
-                    </Typography>
-                    <Typography variant="caption" color="text.disabled">
-                      started {timeAgo(s.started_at)} · runtime {formatDuration(now - s.started_at)}
-                    </Typography>
-                    <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Chip label={`idle ${now - s.last_heartbeat}s`} size="small" color="success" variant="outlined" />
-                      <IconButton size="small" color="error" onClick={() => setKillSessionId(s.session_id)} title="Kill session">
-                        <StopCircleIcon fontSize="small" />
-                      </IconButton>
+                  <Box key={s.session_id} sx={{ py: 0.75 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+                      <Typography variant="caption" fontFamily="monospace" color="text.secondary" sx={{ minWidth: 140 }}>
+                        {s.session_id.slice(0, 16)}...
+                      </Typography>
+                      <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                        HWID: {s.hwid || 'N/A'}
+                      </Typography>
+                      <Typography variant="caption" color="text.disabled">
+                        started {timeAgo(s.started_at)} · runtime {formatDuration(now - s.started_at)}
+                      </Typography>
+                      <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Chip label={`idle ${now - s.last_heartbeat}s`} size="small" color="success" variant="outlined" />
+                        <IconButton size="small" color="error" onClick={() => setKillSessionId(s.session_id)} title="Kill session">
+                          <StopCircleIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     </Box>
+                    {s.stats && (
+                      <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, ml: 0.5, flexWrap: 'wrap' }}>
+                        {s.stats.kills > 0 && <Chip label={`${s.stats.kills} kills`} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />}
+                        {s.stats.xp_earned > 0 && <Chip label={`${(s.stats.xp_earned / 1000).toFixed(1)}k XP`} size="small" variant="outlined" color="primary" sx={{ height: 18, fontSize: '0.65rem' }} />}
+                        {s.stats.items_looted > 0 && <Chip label={`${s.stats.items_looted} items`} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />}
+                        {s.stats.deaths > 0 && <Chip label={`${s.stats.deaths} deaths`} size="small" variant="outlined" color="error" sx={{ height: 18, fontSize: '0.65rem' }} />}
+                      </Box>
+                    )}
                   </Box>
                 ))}
               </Box>

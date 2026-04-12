@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { config } from '../config.js';
 
 const router = Router();
 
 // GET /api/portal/dashboard — user's overview (channel-aware)
 router.get('/', async (req, res) => {
   const userId = req.session.user.id;
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   // User's allowed channels
   const userRow = await db('users').where('id', userId).select('allowed_channels').first();

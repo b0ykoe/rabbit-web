@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { config } from '../config.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
 import { validate, createLicenseSchema, updateLicenseSchema, extendLicenseSchema, assignLicenseSchema } from '../validation/schemas.js';
@@ -11,7 +12,7 @@ router.get('/', async (req, res) => {
   const page   = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const limit  = 25;
   const offset = (page - 1) * limit;
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   const [rows, countResult] = await Promise.all([
     db('licenses')

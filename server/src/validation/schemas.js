@@ -29,6 +29,7 @@ export const createUserSchema = z.object({
   allowed_channels:   z.array(z.enum(['release', 'beta', 'alpha'])).optional().default(['release']),
   status:             z.string().max(255).nullable().optional(),
   hwid_reset_enabled: z.boolean().optional().default(true),
+  feature_flags:      z.record(z.boolean()).optional(),
 });
 
 export const updateUserSchema = z.object({
@@ -39,6 +40,7 @@ export const updateUserSchema = z.object({
   allowed_channels:   z.array(z.enum(['release', 'beta', 'alpha'])).optional(),
   status:             z.string().max(255).nullable().optional(),
   hwid_reset_enabled: z.boolean().optional(),
+  feature_flags:      z.record(z.boolean()).optional(),
 });
 
 export const adjustCreditsSchema = z.object({
@@ -115,6 +117,15 @@ export const botAuthStartSchema = z.object({
 export const botHeartbeatSchema = z.object({
   session_id: z.string().min(1),
   token:      z.string().optional(),
+  stats:      z.object({
+    kills:         z.number().int().default(0),
+    xp_earned:     z.number().int().default(0),
+    items_looted:  z.number().int().default(0),
+    skills_used:   z.number().int().default(0),
+    deaths:        z.number().int().default(0),
+    stuck_escapes: z.number().int().default(0),
+    runtime_ms:    z.number().int().default(0),
+  }).optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

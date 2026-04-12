@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
 
   const [users, countResult] = await Promise.all([
     db('users')
-      .select('id', 'name', 'email', 'role', 'credits', 'allowed_channels', 'status', 'hwid_reset_enabled', 'force_password_change', 'created_at')
+      .select('id', 'name', 'email', 'role', 'credits', 'allowed_channels', 'status', 'hwid_reset_enabled', 'force_password_change', 'feature_flags', 'created_at')
       .orderBy('id', 'asc')
       .limit(limit)
       .offset(offset),
@@ -25,6 +25,7 @@ router.get('/', async (req, res) => {
   if (users.length) {
     for (const u of users) {
       u.allowed_channels = u.allowed_channels ? JSON.parse(u.allowed_channels) : ['release'];
+      u.feature_flags = u.feature_flags ? JSON.parse(u.feature_flags) : {};
     }
     const ids = users.map(u => u.id);
     const counts = await db('licenses')
@@ -45,7 +46,7 @@ router.get('/', async (req, res) => {
 
 // POST /api/admin/users — create
 router.post('/', validate(createUserSchema), async (req, res) => {
-  const { name, email, password, role, allowed_channels, status, hwid_reset_enabled } = req.validated;
+  const { name, email, password, role, allowed_channels, status, hwid_reset_enabled, feature_flags } = req.validated;
 
   const exists = await db('users').where('email', email).first();
   if (exists) {
@@ -58,6 +59,7 @@ router.post('/', validate(createUserSchema), async (req, res) => {
     allowed_channels: JSON.stringify(allowed_channels),
     status: status || null,
     hwid_reset_enabled: hwid_reset_enabled ?? true,
+    feature_flags: feature_flags ? JSON.stringify(feature_flags) : null,
   });
 
   await recordAudit(db, req, {
@@ -105,6 +107,16 @@ router.patch('/:id', validate(updateUserSchema), async (req, res) => {
     oldValues.hwid_reset_enabled = !!user.hwid_reset_enabled;
     newValues.hwid_reset_enabled = req.validated.hwid_reset_enabled;
     updates.hwid_reset_enabled = req.validated.hwid_reset_enabled;
+  }
+
+  if (req.validated.feature_flags !== undefined) {
+    const currentFlags = user.feature_flags ? JSON.parse(user.feature_flags) : {};
+    const newFlags = req.validated.feature_flags;
+    if (JSON.stringify(currentFlags) !== JSON.stringify(newFlags)) {
+      oldValues.feature_flags = currentFlags;
+      newValues.feature_flags = newFlags;
+      updates.feature_flags = JSON.stringify(newFlags);
+    }
   }
 
   if (req.validated.password) {

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../db.js';
+import { config } from '../config.js';
 import { archiveSession } from '../services/licenseService.js';
 
 const router = Router();
@@ -26,7 +27,7 @@ router.delete('/:sessionId', async (req, res) => {
 // GET /api/portal/keys — user's keys with all sessions
 router.get('/', async (req, res) => {
   const userId = req.session.user.id;
-  const cutoff = Math.floor(Date.now() / 1000) - 90;
+  const cutoff = Math.floor(Date.now() / 1000) - config.bot.sessionTimeoutSec;
 
   const licenses = await db('licenses')
     .where('user_id', userId)
@@ -40,15 +41,23 @@ router.get('/', async (req, res) => {
       .whereIn('license_key', keys)
       .where('active', true)
       .orderBy('last_heartbeat', 'desc')
-      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat');
+      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat', 'stats_json');
 
     archivedSessions = await db('bot_sessions')
       .whereIn('license_key', keys)
       .where('active', false)
       .orderBy('ended_at', 'desc')
       .limit(20)
-      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat', 'ended_at', 'end_reason');
+      .select('session_id', 'license_key', 'hwid', 'started_at', 'last_heartbeat', 'ended_at', 'end_reason', 'stats_json');
   }
+
+  // Parse stats_json for all sessions
+  const parseStats = (s) => {
+    try { s.stats = s.stats_json ? JSON.parse(s.stats_json) : null; } catch { s.stats = null; }
+    delete s.stats_json;
+  };
+  activeSessions.forEach(parseStats);
+  archivedSessions.forEach(parseStats);
 
   for (const lic of licenses) {
     lic.liveSessions     = activeSessions.filter(s => s.license_key === lic.license_key && s.last_heartbeat > cutoff);

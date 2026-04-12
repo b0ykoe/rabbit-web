@@ -3,14 +3,42 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Button, MenuItem, Alert, FormControl, InputLabel,
   Select, OutlinedInput, Checkbox, ListItemText, Chip, Box,
-  FormControlLabel, Switch,
+  FormControlLabel, Switch, Typography,
 } from '@mui/material';
 
 const CHANNELS = ['release', 'beta', 'alpha'];
 
+// Feature flag definitions — add new ones here and they appear in the UI automatically
+const FEATURE_FLAG_GROUPS = [
+  { label: 'User Features', flags: [
+    { key: 'training',   label: 'Training' },
+    { key: 'skills',     label: 'Skills' },
+    { key: 'monsters',   label: 'Monsters' },
+    { key: 'statistics', label: 'Statistics' },
+    { key: 'combo',      label: 'Combo' },
+    { key: 'hwid_spoof', label: 'HWID Spoof' },
+  ]},
+  { label: 'Developer', flags: [
+    { key: 'dev',            label: 'Dev (Master)' },
+    { key: 'dev_movement',   label: 'Movement' },
+    { key: 'dev_entities',   label: 'Entities' },
+    { key: 'dev_drops',      label: 'Drops' },
+    { key: 'dev_skills',     label: 'Skills (Dev)' },
+    { key: 'dev_advanced',   label: 'Advanced' },
+    { key: 'dev_blacklist',  label: 'Blacklist' },
+    { key: 'dev_obstacles',  label: 'Obstacles' },
+    { key: 'dev_npc',        label: 'NPC' },
+    { key: 'dev_combo',      label: 'Combo (Dev)' },
+  ]},
+];
+
+const DEFAULT_FLAGS = Object.fromEntries(
+  FEATURE_FLAG_GROUPS.flatMap(g => g.flags).map(f => [f.key, f.key.startsWith('dev') ? false : true])
+);
+
 export default function UserFormDialog({ open, onClose, onSubmit, user = null }) {
   const isEdit = !!user;
-  const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true });
+  const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true, feature_flags: { ...DEFAULT_FLAGS } });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -24,9 +52,10 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
         allowed_channels: user.allowed_channels || ['release'],
         status: user.status || '',
         hwid_reset_enabled: user.hwid_reset_enabled ?? true,
+        feature_flags: { ...DEFAULT_FLAGS, ...(user.feature_flags || {}) },
       });
     } else {
-      setForm({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true });
+      setForm({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true, feature_flags: { ...DEFAULT_FLAGS } });
     }
     setError('');
   }, [user, open]);
@@ -108,6 +137,44 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
             }
             label="Allow HWID Reset"
           />
+
+          {/* Feature Flags */}
+          {FEATURE_FLAG_GROUPS.map((group) => (
+            <Box key={group.label}>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {group.label}
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0, ml: -1 }}>
+                {group.flags.map((flag) => {
+                  const disabled = flag.key.startsWith('dev_') && flag.key !== 'dev' && !form.feature_flags?.dev;
+                  return (
+                    <FormControlLabel
+                      key={flag.key}
+                      sx={{ minWidth: 130 }}
+                      control={
+                        <Checkbox
+                          size="small"
+                          checked={!!form.feature_flags?.[flag.key]}
+                          disabled={disabled}
+                          onChange={(e) => {
+                            const updated = { ...form.feature_flags, [flag.key]: e.target.checked };
+                            // If dev master toggled off, disable all dev sub-flags
+                            if (flag.key === 'dev' && !e.target.checked) {
+                              for (const f of group.flags) {
+                                if (f.key.startsWith('dev_')) updated[f.key] = false;
+                              }
+                            }
+                            setForm({ ...form, feature_flags: updated });
+                          }}
+                        />
+                      }
+                      label={<Typography variant="body2">{flag.label}</Typography>}
+                    />
+                  );
+                })}
+              </Box>
+            </Box>
+          ))}
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
