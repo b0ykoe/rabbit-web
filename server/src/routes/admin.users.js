@@ -156,6 +156,13 @@ router.patch('/:id', validate(updateUserSchema), async (req, res) => {
   }
 
   await db('users').where('id', id).update(updates);
+
+  // W-2: if role changed or password was force-reset here, any outstanding
+  // tokens the user holds should stop working immediately.
+  if (updates.role !== undefined || updates.password !== undefined) {
+    await db('users').where('id', id).increment('token_version', 1);
+  }
+
   await recordAudit(db, req, {
     action: 'user.update', subjectType: 'user', subjectId: id, oldValues, newValues,
   });

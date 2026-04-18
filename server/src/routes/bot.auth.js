@@ -4,9 +4,9 @@ import db from '../db.js';
 import { config } from '../config.js';
 import { signToken, parseTokenPayload, verifyToken, generateJti } from '../crypto/ed25519.js';
 import { hasAvailableSlot, archiveSession, archiveOldestSessionByKey } from '../services/licenseService.js';
-import { validateBotUserToken } from '../middleware/botToken.js';
+import { validateBotUserToken, validateBotToken } from '../middleware/botToken.js';
 import { recordAudit } from '../services/auditLog.js';
-import { isJtiBlocked, isTokenVersionCurrent } from '../services/tokenSecurity.js';
+import { botHeartbeatSessionLimiter } from '../middleware/rateLimiter.js';
 import { validate, botLoginSchema, botAuthStartSchema, botHeartbeatSchema } from '../validation/schemas.js';
 
 // Full feature-flag map used when the user is a super-admin — every key
@@ -126,8 +126,19 @@ router.post('/redeem', validateBotUserToken, async (req, res) => {
   if (license.expires_at && new Date(license.expires_at) < new Date())
     return res.status(422).json({ error: 'Key has expired' });
 
-  await db('licenses').where('license_key', key).update({ user_id: req.botUser.id });
-  res.json({ ok: true, license_key: key });
+  // Same "redeem starts the clock" rule as the portal redeem path: if
+  // the key was purchased with a duration but no fixed end date, the
+  // countdown starts from this moment.
+  const updates = { user_id: req.botUser.id };
+  let resolvedExpiry = license.expires_at;
+  if (!license.expires_at && license.duration_days) {
+    const expiry = new Date(Date.now() + license.duration_days * 86400000);
+    resolvedExpiry = expiry.toISOString().slice(0, 19).replace('T', ' ');
+    updates.expires_at = resolvedExpiry;
+  }
+
+  await db('licenses').where('license_key', key).update(updates);
+  res.json({ ok: true, license_key: key, expires_at: resolvedExpiry });
 });
 
 // POST /api/bot/auth/start — validate key, create session, issue signed token
@@ -154,10 +165,12 @@ router.post('/start', validate(botAuthStartSchema), async (req, res) => {
   // HWID binding — if key has a bound HWID, reject mismatches
   if (hwid && license.bound_hwid && license.bound_hwid !== hwid) {
     // W-6: HWID mismatch is a signal of license sharing. Always audit.
+    // We know the owning user (license.user_id) — attribute the event.
     await recordAudit(db, req, {
       action: 'auth.hwid_mismatch',
       subjectType: 'license',
       subjectId: license.id || null,
+      userId: license.user_id || null,
       oldValues: { bound_hwid: license.bound_hwid },
       newValues: { attempted_hwid: hwid, license_key: key, session_id },
     });
@@ -242,31 +255,19 @@ router.post('/start', validate(botAuthStartSchema), async (req, res) => {
 
 // POST /api/bot/auth/heartbeat — update last_heartbeat + optional token refresh
 //
-// C-2: the token is MANDATORY and MUST be verified. We reject if:
-//   - signature fails (Ed25519)
-//   - jti is blocklisted (W-1)
-//   - tvr is older than license.token_version (W-2)
-//   - payload.session_id ≠ body.session_id (session hijack prevention)
-//   - payload.key ≠ session.license_key (cross-session token reuse)
-router.post('/heartbeat', validate(botHeartbeatSchema), async (req, res) => {
-  const { session_id, token, stats } = req.validated;
-
-  if (!token) {
-    return res.status(401).json({ error: 'Missing session token' });
-  }
-
-  const verified = await verifyToken(token, config.bot.ed25519PublicKey);
-  if (!verified) {
-    return res.status(401).json({ error: 'Invalid or expired token' });
-  }
-  const { payload: tp } = verified;
+// Middleware chain handles: signature (validateBotToken), jti blocklist (W-1),
+// tvr version (W-2), then per-session rate limit (W-3). Handler only enforces
+// the session-level bindings that middleware can't see.
+router.post('/heartbeat',
+  validate(botHeartbeatSchema),
+  validateBotToken,
+  botHeartbeatSessionLimiter,
+  async (req, res) => {
+  const { session_id, stats } = req.validated;
+  const tp = req.botToken;
 
   if (tp.session_id !== session_id) {
     return res.status(401).json({ error: 'Session/token mismatch' });
-  }
-
-  if (tp.jti && await isJtiBlocked(db, tp.jti)) {
-    return res.status(401).json({ error: 'Token revoked' });
   }
 
   const session = await db('bot_sessions').where({ session_id, active: true }).first();
@@ -277,10 +278,6 @@ router.post('/heartbeat', validate(botHeartbeatSchema), async (req, res) => {
   // Token must belong to THIS session's license.
   if (tp.key !== session.license_key) {
     return res.status(401).json({ error: 'Session/token license mismatch' });
-  }
-
-  if (!(await isTokenVersionCurrent(db, 'license', tp.key, tp.tvr))) {
-    return res.status(401).json({ error: 'Token version outdated' });
   }
 
   const now = Math.floor(Date.now() / 1000);

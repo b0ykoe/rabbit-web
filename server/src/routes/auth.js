@@ -90,6 +90,9 @@ router.post('/change-password', requireAuth, validate(changePasswordSchema), asy
     password:              hash,
     force_password_change: false,
   });
+  // W-2: invalidate any outstanding user tokens — a leaked password is
+  // the exact scenario where we want every pre-rotation token dead.
+  await db('users').where('id', userId).increment('token_version', 1);
 
   // Update session
   req.session.user.force_password_change = false;

@@ -146,6 +146,9 @@ router.patch('/:key/revoke', async (req, res) => {
   if (!lic) return res.status(404).json({ error: 'License not found' });
 
   await db('licenses').where('license_key', key).update({ active: false });
+  // W-2: any outstanding signed tokens for this key are now invalid —
+  // bump token_version so the next heartbeat/verify rejects them.
+  await db('licenses').where('license_key', key).increment('token_version', 1);
   await recordAudit(db, req, {
     action: 'license.revoke', subjectType: 'license', subjectId: key,
     oldValues: { active: true }, newValues: { active: false },
@@ -179,6 +182,8 @@ router.patch('/:key/reset-hwid', async (req, res) => {
   if (!lic.bound_hwid) return res.json({ message: 'No HWID bound' });
 
   await db('licenses').where('license_key', key).update({ bound_hwid: null });
+  // W-2: invalidate outstanding tokens bound to the old HWID.
+  await db('licenses').where('license_key', key).increment('token_version', 1);
   // Archive active sessions for this key so the new HWID can connect
   const { archiveSessionsByKey } = await import('../services/licenseService.js');
   await archiveSessionsByKey(db, key, 'hwid_reset');

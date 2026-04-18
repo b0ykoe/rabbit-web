@@ -27,6 +27,8 @@ router.post('/', validate(resetHwidSchema), async (req, res) => {
   }
 
   await db('licenses').where('license_key', license_key).update({ bound_hwid: null });
+  // W-2: invalidate outstanding tokens bound to the old HWID.
+  await db('licenses').where('license_key', license_key).increment('token_version', 1);
   // Archive active sessions so new HWID can connect
   const { archiveSessionsByKey } = await import('../services/licenseService.js');
   await archiveSessionsByKey(db, license_key, 'hwid_reset');

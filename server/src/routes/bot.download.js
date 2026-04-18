@@ -62,8 +62,19 @@ async function serveRelease(req, res, type) {
     ? req.body.channel
     : null;
 
-  // Verify user has access to the requested channel
+  // Verify user has access to the requested channel. W-12: probing for
+  // unauthorized channels leaves an audit trail so super-admins can spot
+  // clients brute-forcing channel names.
   if (channel && !req.botUser.allowed_channels.includes(channel)) {
+    await db('audit_logs').insert({
+      user_id:      req.botUser.id,
+      action:       'channel_denied',
+      subject_type: 'release',
+      subject_id:   type,
+      new_values:   JSON.stringify({ requested_channel: channel, allowed_channels: req.botUser.allowed_channels }),
+      ip_address:   req.ip || null,
+      user_agent:   (req.get('user-agent') || '').slice(0, 255) || null,
+    });
     return res.status(403).json({ error: 'No access to this channel' });
   }
 
@@ -83,6 +94,14 @@ async function serveRelease(req, res, type) {
 
   const plaintext = fs.readFileSync(release.file_path);
   const { iv, data } = encryptFile(plaintext, req.botTokenRaw);
+
+  // W-8: detached Ed25519 signature over the *plaintext* bytes. Bot
+  // decrypts AES, then verifies `sig` against the plaintext with the
+  // pinned public key before loading/executing. Older releases without
+  // a stored signature fall back to sha256-only verification.
+  if (release.dll_signature) {
+    res.setHeader('X-Release-Signature', release.dll_signature);
+  }
 
   res.json({
     sha256:  release.sha256,

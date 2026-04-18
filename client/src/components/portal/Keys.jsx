@@ -143,7 +143,13 @@ export default function Keys() {
                 }}
               >
                 <CopyableText text={k.license_key} />
-                <ExpiryBadge expiresAt={k.expires_at} />
+                {k.duration_days && !k.expires_at ? (
+                  <Typography variant="caption" color="warning.main">
+                    {k.duration_days}d banked — starts on redeem
+                  </Typography>
+                ) : (
+                  <ExpiryBadge expiresAt={k.expires_at} />
+                )}
                 {k.note && (
                   <Typography variant="caption" color="text.disabled">{k.note}</Typography>
                 )}

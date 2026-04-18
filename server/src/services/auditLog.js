@@ -12,10 +12,14 @@
  * @param {string|number} [opts.subjectId]
  * @param {object} [opts.oldValues]
  * @param {object} [opts.newValues]
+ * @param {number} [opts.userId] - override user_id (bot endpoints: derive from license)
  */
-export async function recordAudit(db, req, { action, subjectType, subjectId, oldValues, newValues }) {
+export async function recordAudit(db, req, { action, subjectType, subjectId, oldValues, newValues, userId }) {
+  const resolvedUserId = userId != null
+    ? userId
+    : (req.session?.user?.id || null);
   await db('audit_logs').insert({
-    user_id:      req.session?.user?.id || null,
+    user_id:      resolvedUserId,
     action,
     subject_type: subjectType || null,
     subject_id:   subjectId != null ? String(subjectId) : null,

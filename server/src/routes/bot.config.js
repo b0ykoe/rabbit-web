@@ -1,26 +1,16 @@
 import { Router } from 'express';
 import db from '../db.js';
-import { validateBotUserToken } from '../middleware/botToken.js';
+import { validateBotToken } from '../middleware/botToken.js';
 
 const router = Router();
 
+// C-3: user_id comes from the signed session-token payload (req.botToken.key
+// → licenses row → user_id), never from an unsigned session_id field.
 async function resolveUserId(req) {
-  if (req.botUser?.id) return req.botUser.id;
-  const sessionId = req.query?.session_id || req.body?.session_id;
-  if (sessionId) {
-    const session = await db('bot_sessions').where({ session_id: sessionId, active: true }).first();
-    if (session) {
-      const license = await db('licenses').where('license_key', session.license_key).first();
-      if (license?.user_id) return license.user_id;
-    }
-  }
-  return null;
-}
-
-async function optionalUserToken(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) return validateBotUserToken(req, res, next);
-  next();
+  const licenseKey = req.botToken?.key;
+  if (!licenseKey) return null;
+  const license = await db('licenses').where('license_key', licenseKey).first();
+  return license?.user_id || null;
 }
 
 // Use empty string for global/hwid (MySQL NULL breaks unique constraints)
@@ -91,16 +81,16 @@ async function putConfig(req, res, configType) {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
-router.get('/character',  optionalUserToken, (req, res) => getConfig(req, res, 'character'));
-router.put('/character',  optionalUserToken, (req, res) => putConfig(req, res, 'character'));
-router.post('/character', optionalUserToken, (req, res) => putConfig(req, res, 'character'));
+router.get('/character',  validateBotToken, (req, res) => getConfig(req, res, 'character'));
+router.put('/character',  validateBotToken, (req, res) => putConfig(req, res, 'character'));
+router.post('/character', validateBotToken, (req, res) => putConfig(req, res, 'character'));
 
-router.get('/global',  optionalUserToken, (req, res) => getConfig(req, res, 'global'));
-router.put('/global',  optionalUserToken, (req, res) => putConfig(req, res, 'global'));
-router.post('/global', optionalUserToken, (req, res) => putConfig(req, res, 'global'));
+router.get('/global',  validateBotToken, (req, res) => getConfig(req, res, 'global'));
+router.put('/global',  validateBotToken, (req, res) => putConfig(req, res, 'global'));
+router.post('/global', validateBotToken, (req, res) => putConfig(req, res, 'global'));
 
-router.get('/hwid',  optionalUserToken, (req, res) => getConfig(req, res, 'hwid'));
-router.put('/hwid',  optionalUserToken, (req, res) => putConfig(req, res, 'hwid'));
-router.post('/hwid', optionalUserToken, (req, res) => putConfig(req, res, 'hwid'));
+router.get('/hwid',  validateBotToken, (req, res) => getConfig(req, res, 'hwid'));
+router.put('/hwid',  validateBotToken, (req, res) => putConfig(req, res, 'hwid'));
+router.post('/hwid', validateBotToken, (req, res) => putConfig(req, res, 'hwid'));
 
 export default router;

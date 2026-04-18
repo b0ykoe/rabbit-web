@@ -27,6 +27,20 @@ export function generateJti() {
 }
 
 /**
+ * Sign arbitrary bytes and return a base64-encoded detached signature.
+ * Used for release-artifact signing (W-8) so the bot can verify a
+ * downloaded DLL wasn't swapped by a MITM between upload and install.
+ * @param {Buffer|Uint8Array} bytes - payload to sign
+ * @param {string} privKeyHex - 128-char hex string (64-byte libsodium secret key)
+ * @returns {Promise<string>} base64-encoded 64-byte signature (~88 chars)
+ */
+export async function signBytes(bytes, privKeyHex) {
+  const seed = Buffer.from(privKeyHex.slice(0, 64), 'hex');
+  const sig  = await ed.signAsync(bytes, seed);
+  return Buffer.from(sig).toString('base64');
+}
+
+/**
  * Sign a JSON payload and produce a base64-encoded token.
  * @param {object} payload - The token payload (will be JSON-stringified)
  * @param {string} privKeyHex - 128-char hex string (64-byte libsodium secret key)

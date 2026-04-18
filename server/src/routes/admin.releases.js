@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import db from '../db.js';
 import { config } from '../config.js';
 import { recordAudit } from '../services/auditLog.js';
+import { signBytes } from '../crypto/ed25519.js';
 import { validate, uploadReleaseSchema, updateReleaseSchema } from '../validation/schemas.js';
 
 const upload = multer({ dest: path.join(config.bot.privateDir, '_tmp'), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -53,13 +54,15 @@ router.post('/', upload.single('file'), async (req, res) => {
 
   fs.renameSync(req.file.path, filePath);
 
-  // Compute both SHA-256 and MD5
+  // Compute SHA-256, MD5, and a detached Ed25519 signature over the raw
+  // bytes so the bot can verify the artifact on download (W-8).
   const fileBuffer = fs.readFileSync(filePath);
   const sha256 = crypto.createHash('sha256').update(fileBuffer).digest('hex');
   const md5    = crypto.createHash('md5').update(fileBuffer).digest('hex');
+  const dll_signature = await signBytes(fileBuffer, config.bot.ed25519PrivateKey);
 
   const [id] = await db('releases').insert({
-    type, channel, version, file_path: filePath, sha256, md5, changelog, active: false,
+    type, channel, version, file_path: filePath, sha256, md5, dll_signature, changelog, active: false,
   });
 
   // Deactivate others of same type + channel, activate this one

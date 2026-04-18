@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.11.0] — Protocol hardening (Stage 1+2+3) + super_admin routing fix
+
+### Added — Protocol hardening
+
+- **Fail-fast on secrets** — [config.js](server/src/config.js) throws at
+  boot if `SESSION_SECRET` (< 32 chars), `BOT_ED25519_PRIVATE_KEY`
+  (< 128 hex) or `BOT_ED25519_PUBLIC_KEY` (< 64 hex) are missing or
+  weak. No silent fallback to `CHANGE_ME`.
+- **`jti` replay protection + `tvr` bulk revocation** —
+  [migration 017_token_security.js](server/migrations/017_token_security.js)
+  adds `users.token_version`, `licenses.token_version`, and a
+  `token_blocklist(jti PK, expires_at, reason)` table.
+  [tokenSecurity.js](server/src/services/tokenSecurity.js) exposes
+  `isJtiBlocked`, `blockJti`, `purgeExpiredBlocklist`,
+  `bumpUserTokenVersion`, `bumpLicenseTokenVersion`,
+  `isTokenVersionCurrent`. `/login` + `/start` embed `jti` (16-byte
+  random) and `tvr` (principal version) in every signed token;
+  [botToken.js](server/src/middleware/botToken.js) rejects blocklisted
+  or outdated tokens.
+- **Token-version bumps on sensitive events** — password change
+  ([auth.js](server/src/routes/auth.js)), role change + admin delete
+  ([admin.users.js](server/src/routes/admin.users.js)), license revoke
+  + admin HWID reset + portal HWID reset
+  ([admin.licenses.js](server/src/routes/admin.licenses.js),
+  [portal.reset-hwid.js](server/src/routes/portal.reset-hwid.js)) all
+  `increment('token_version', 1)`, instantly invalidating every
+  outstanding token for the principal.
+- **Heartbeat requires verified token (C-2)** —
+  [bot.auth.js](server/src/routes/bot.auth.js) `/heartbeat` verifies
+  Ed25519 signature, enforces `payload.session_id == body.session_id`
+  and `payload.key == session.license_key`, rejects revoked/outdated
+  tokens. Same-bucket rate limit added per-session (120/min keyed on
+  `req.botToken.session_id`, after validation) on top of the IP limit.
+- **Signed DLL downloads (W-8)** —
+  [migration 018_release_signature.js](server/migrations/018_release_signature.js)
+  adds `releases.dll_signature`. [admin.releases.js](server/src/routes/admin.releases.js)
+  computes a detached Ed25519 signature at upload time; bot download
+  returns it via `X-Release-Signature` header so the client can
+  verify the plaintext bytes post-decrypt.
+- **`/end` is idempotent + signed (W-11)** — requires a token whose
+  `payload.session_id` matches the body; returns 410 for unknown
+  sessions, 200 `{ok:true, already_ended:true}` for already-archived.
+- **Audit-log trail on auth failures (W-6)** — `auth.failed_login`
+  (bad password / unknown email), `auth.invalid_key`,
+  `auth.hwid_mismatch`, `channel_denied` on
+  [bot.download.js](server/src/routes/bot.download.js).
+- **Config endpoints require signed session token (C-3)** —
+  [bot.config.js](server/src/routes/bot.config.js) now uses
+  `validateBotToken`; `user_id` is derived from the token's `key`
+  via the licenses table, not from an unsigned `session_id` field.
+  Closes the vulnerability where anyone observing a session_id could
+  read/write that user's bot configs. Middleware accepts the token
+  from either the body (`token` field) or an `Authorization: Bearer`
+  header (used by GET).
+- **Blocklist GC** — [sessionCleanup.js](server/src/services/sessionCleanup.js)
+  calls `purgeExpiredBlocklist` every tick alongside stale-session
+  archival, so the table stays small.
+
+### Fixed — super_admin client routing
+
+- Login redirect + ProtectedRoute guard treated `'admin'` as a strict
+  literal. A user with `role='super_admin'` could log in but was
+  bounced to `/portal` and blocked from `/admin`. Both call-sites now
+  admit admin and super_admin:
+  [Login.jsx](client/src/components/auth/Login.jsx),
+  [ProtectedRoute.jsx](client/src/components/Layout/ProtectedRoute.jsx).
+
+### Fixed — `audit_logs.user_id` NOT NULL crash
+
+- Bot-side audit events (failed_login, invalid_key, hwid_mismatch) hit
+  a MySQL `ER_BAD_NULL_ERROR` because the column was NOT NULL and no
+  authenticated user exists for those requests. New
+  [migration 019_audit_user_id_nullable.js](server/migrations/019_audit_user_id_nullable.js)
+  relaxes the column + swaps the FK from `ON DELETE CASCADE` to
+  `ON DELETE SET NULL` (audit trail survives user deletion).
+  [auditLog.js](server/src/services/auditLog.js) `recordAudit` now
+  accepts an optional `userId` override; `hwid_mismatch` populates
+  it from `license.user_id` for proper forensics.
+
+### New files
+
+- `server/migrations/017_token_security.js`
+- `server/migrations/018_release_signature.js`
+- `server/migrations/019_audit_user_id_nullable.js`
+- `server/src/services/tokenSecurity.js`
+
+### Notes
+
+- Run `npm run migrate` after pulling.
+- Bot must have the matching `BOT_ED25519_PUBLIC_KEY_HEX` in
+  [Bot/shared/app_config.h](../Bot/shared/app_config.h); out-of-the-box
+  it's all-zero which disables verification (dev only).
+
 ## [0.10.0] — Feature-flag parity + role hierarchy + session security
 
 ### Added

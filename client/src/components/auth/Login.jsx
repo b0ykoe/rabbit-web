@@ -6,6 +6,10 @@ import {
 import LockIcon from '@mui/icons-material/Lock';
 import { useAuth } from '../../context/AuthContext.jsx';
 
+// super_admin is a superset of admin — land both on the admin panel.
+const landingFor = (role) =>
+  (role === 'admin' || role === 'super_admin') ? '/admin' : '/portal';
+
 export default function Login() {
   const navigate = useNavigate();
   const { login, user } = useAuth();
@@ -17,7 +21,7 @@ export default function Login() {
 
   // Already logged in — redirect
   if (user) {
-    navigate(user.role === 'admin' ? '/admin' : '/portal', { replace: true });
+    navigate(landingFor(user.role), { replace: true });
     return null;
   }
 
@@ -27,7 +31,7 @@ export default function Login() {
     setLoading(true);
     try {
       const u = await login({ email, password, remember });
-      navigate(u.role === 'admin' ? '/admin' : '/portal', { replace: true });
+      navigate(landingFor(u.role), { replace: true });
     } catch (err) {
       setError(err.data?.error || 'Login failed');
     } finally {

@@ -20,11 +20,13 @@ router.get('/', async (req, res) => {
     .where({ user_id: req.session.user.id, active: true })
     .select('license_key', 'expires_at', 'max_sessions');
 
-  // Bought but unredeemed keys
+  // Bought but unredeemed keys. `duration_days` is the banked time the
+  // user will get *from the moment they redeem* — no clock ticking while
+  // the key sits here.
   const boughtKeys = await db('licenses')
     .where({ purchased_by: req.session.user.id, active: true })
     .whereNull('user_id')
-    .select('license_key', 'expires_at', 'max_sessions', 'note', 'created_at');
+    .select('license_key', 'expires_at', 'duration_days', 'max_sessions', 'note', 'created_at');
 
   // Parse feature flags
   let featureFlags = {};

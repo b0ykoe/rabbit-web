@@ -15,9 +15,13 @@ import { isJtiBlocked, isTokenVersionCurrent } from '../services/tokenSecurity.j
 /**
  * Validate a bot session token (payload {key, session_id, jti, tvr, exp,…}).
  * Also verifies replay + revocation state.
+ * Token may arrive either in the JSON body (`token` field) for POST/PUT
+ * or via `Authorization: Bearer <b64>` for GET.
  */
 export async function validateBotToken(req, res, next) {
-  const tokenB64 = req.body?.token;
+  const authHeader = req.headers.authorization;
+  const tokenB64 = req.body?.token
+    || (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null);
   if (!tokenB64) {
     return res.status(400).json({ error: 'Missing token' });
   }
