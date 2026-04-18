@@ -12,9 +12,19 @@
 
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
+import crypto from 'node:crypto';
 
 // @noble/ed25519 v2 requires setting the hash manually
 ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
+
+/**
+ * Generate a random 32-char hex jti (16 random bytes). Used as the
+ * unique-token-id claim so a token can be blocklisted in the short
+ * window before it naturally expires.
+ */
+export function generateJti() {
+  return crypto.randomBytes(16).toString('hex');
+}
 
 /**
  * Sign a JSON payload and produce a base64-encoded token.

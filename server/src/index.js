@@ -35,6 +35,8 @@ import portalShopRoutes     from './routes/portal.shop.js';
 import portalDownloadRoutes from './routes/portal.download.js';
 import portalStatusesRoutes from './routes/portal.statuses.js';
 import portalResetHwidRoutes from './routes/portal.reset-hwid.js';
+import portalSessionsRoutes from './routes/portal.sessions.js';
+import adminSettingsRoutes  from './routes/admin.settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -106,6 +108,7 @@ app.use('/api/admin/releases',  adminReleasesRoutes);
 app.use('/api/admin/sessions',  adminSessionsRoutes);
 app.use('/api/admin/audit',     adminAuditRoutes);
 app.use('/api/admin/statuses',  adminStatusesRoutes);
+app.use('/api/admin/settings',  adminSettingsRoutes);
 
 // ── Portal API Routes ────────────────────────────────────────────────────────
 
@@ -116,6 +119,7 @@ app.use('/api/portal/statuses',  portalStatusesRoutes);
 app.use('/api/portal/shop',      portalShopRoutes);
 app.use('/api/portal/download',  portalDownloadRoutes);
 app.use('/api/portal/reset-hwid', portalResetHwidRoutes);
+app.use('/api/portal/sessions',  portalSessionsRoutes);
 
 // ── Static Files (React build — production only) ─────────────────────────────
 // In dev, Vite serves the frontend on :5173 and proxies /api to Express.

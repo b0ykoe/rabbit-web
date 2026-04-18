@@ -11,6 +11,7 @@ import SensorsIcon from '@mui/icons-material/Sensors';
 import HistoryIcon from '@mui/icons-material/History';
 import AnnouncementIcon from '@mui/icons-material/Announcement';
 import LogoutIcon from '@mui/icons-material/Logout';
+import SettingsIcon from '@mui/icons-material/Settings';
 import { useAuth } from '../../context/AuthContext.jsx';
 
 const DRAWER_WIDTH = 224;
@@ -23,6 +24,7 @@ const navItems = [
   { label: 'Sessions',  icon: <SensorsIcon />,     path: '/admin/sessions' },
   { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
+  { label: 'Settings',  icon: <SettingsIcon />,    path: '/admin/settings' },
 ];
 
 export default function AdminLayout() {

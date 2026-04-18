@@ -54,8 +54,8 @@ export default function Dashboard() {
                       <Chip label={activeReleases[type].channel} size="small" color={getChannelColor(activeReleases[type].channel)} variant="outlined" />
                     )}
                   </Box>
-                  <Typography variant="caption" fontFamily="monospace" color="text.disabled" sx={{ display: 'block', mt: 0.5 }}>
-                    SHA-256: {activeReleases[type].sha256?.slice(0, 20)}...
+                  <Typography variant="caption" fontFamily="monospace" color="text.disabled" sx={{ display: 'block', mt: 0.5, wordBreak: 'break-all' }}>
+                    SHA-256: {activeReleases[type].sha256}
                   </Typography>
                 </Box>
               ) : (
@@ -89,8 +89,8 @@ export default function Dashboard() {
             <tbody>
               {recentSessions.map((s) => (
                 <tr key={s.session_id}>
-                  <td><Typography variant="caption" fontFamily="monospace">{s.session_id.slice(0, 12)}...</Typography></td>
-                  <td><Typography variant="caption" fontFamily="monospace" color="text.secondary">{s.hwid ? s.hwid.slice(0, 12) + '...' : 'N/A'}</Typography></td>
+                  <td><CopyableText text={s.session_id} /></td>
+                  <td>{s.hwid ? <CopyableText text={s.hwid} /> : <Typography variant="caption" color="text.disabled">N/A</Typography>}</td>
                   <td><CopyableText text={s.license_key} /></td>
                   <td>{s.user_name || <Typography variant="caption" color="text.disabled">—</Typography>}</td>
                   <td align="right">

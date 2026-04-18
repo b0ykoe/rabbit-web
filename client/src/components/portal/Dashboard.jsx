@@ -59,8 +59,8 @@ export default function Dashboard() {
                   Idle {now - activeSession.last_heartbeat}s
                 </Typography>
                 {activeSession.hwid && (
-                  <Typography variant="caption" fontFamily="monospace" color="text.disabled" sx={{ display: 'block' }}>
-                    {activeSession.hwid.slice(0, 16)}...
+                  <Typography variant="caption" fontFamily="monospace" color="text.disabled" sx={{ display: 'block', wordBreak: 'break-all' }}>
+                    {activeSession.hwid}
                   </Typography>
                 )}
               </>

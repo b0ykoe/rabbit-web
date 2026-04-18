@@ -5,18 +5,24 @@ import {
   Select, OutlinedInput, Checkbox, ListItemText, Chip, Box,
   FormControlLabel, Switch, Typography,
 } from '@mui/material';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 const CHANNELS = ['release', 'beta', 'alpha'];
 
-// Feature flag definitions — add new ones here and they appear in the UI automatically
+// Feature flag definitions — add new ones here and they appear in the UI
+// automatically. Keep in sync with Bot/inject/feature_flags.h — the bot's
+// FeatureFlags struct is the source of truth for which keys the DLL reads.
 const FEATURE_FLAG_GROUPS = [
   { label: 'User Features', flags: [
-    { key: 'training',   label: 'Training' },
-    { key: 'skills',     label: 'Skills' },
-    { key: 'monsters',   label: 'Monsters' },
-    { key: 'statistics', label: 'Statistics' },
-    { key: 'combo',      label: 'Combo' },
-    { key: 'hwid_spoof', label: 'HWID Spoof' },
+    { key: 'training',    label: 'Training' },
+    { key: 'skills',      label: 'Skills' },
+    { key: 'monsters',    label: 'Monsters' },
+    { key: 'statistics',  label: 'Statistics' },
+    { key: 'combo',       label: 'Combo' },
+    { key: 'inventory',   label: 'Inventory' },
+    { key: 'buffs',       label: 'Buffs' },
+    { key: 'consumables', label: 'Consumables' },
+    { key: 'hwid_spoof',  label: 'HWID Spoof' },
   ]},
   { label: 'Developer', flags: [
     { key: 'dev',            label: 'Dev (Master)' },
@@ -29,15 +35,35 @@ const FEATURE_FLAG_GROUPS = [
     { key: 'dev_obstacles',  label: 'Obstacles' },
     { key: 'dev_npc',        label: 'NPC' },
     { key: 'dev_combo',      label: 'Combo (Dev)' },
+    { key: 'dev_terrain',    label: 'Terrain' },
+    { key: 'dev_debug',      label: 'Debug' },
+    { key: 'dev_chat',       label: 'Chat' },
+    { key: 'dev_inventory',  label: 'Inventory (Dev)' },
+    { key: 'dev_buffs',      label: 'Buffs (Dev)' },
+    { key: 'dev_anticheat',  label: 'AntiCheat' },
+    { key: 'dev_packets',    label: 'Packets' },
   ]},
 ];
 
+// Modules sold in the shop — default to OFF for new users. Admin must
+// explicitly grant each one (bot sees `false` until toggled).
+const SHOP_MODULES = new Set([
+  'hwid_spoof',
+  'inventory',
+  'buffs',
+  'consumables',
+]);
+
 const DEFAULT_FLAGS = Object.fromEntries(
-  FEATURE_FLAG_GROUPS.flatMap(g => g.flags).map(f => [f.key, f.key.startsWith('dev') ? false : true])
+  FEATURE_FLAG_GROUPS.flatMap(g => g.flags).map(f => [f.key, f.key.startsWith('dev') || SHOP_MODULES.has(f.key) ? false : true])
 );
 
 export default function UserFormDialog({ open, onClose, onSubmit, user = null }) {
   const isEdit = !!user;
+  const { user: me } = useAuth();
+  // Only super-admins may assign admin / super_admin roles. Plain admins
+  // can only CRUD regular-user accounts.
+  const canAssignAdminRoles = me?.role === 'super_admin';
   const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true, feature_flags: { ...DEFAULT_FLAGS } });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -95,9 +121,20 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
             value={form.password}
             onChange={handleChange('password')}
           />
-          <TextField label="Role" select size="small" value={form.role} onChange={handleChange('role')}>
-            <MenuItem value="admin">Admin</MenuItem>
+          <TextField
+            label="Role"
+            select
+            size="small"
+            value={form.role}
+            onChange={handleChange('role')}
+            // Plain admins can only pick `user`; the admin / super_admin
+            // options are hidden unless the acting user is super_admin.
+            disabled={!canAssignAdminRoles && form.role !== 'user'}
+            helperText={!canAssignAdminRoles ? 'Only super-admin can assign admin roles' : ''}
+          >
             <MenuItem value="user">User</MenuItem>
+            {canAssignAdminRoles && <MenuItem value="admin">Admin</MenuItem>}
+            {canAssignAdminRoles && <MenuItem value="super_admin">Super Admin</MenuItem>}
           </TextField>
           <FormControl size="small">
             <InputLabel>Version Channels</InputLabel>

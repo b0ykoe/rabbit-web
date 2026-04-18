@@ -7,6 +7,7 @@ import StatusBadge from '../common/StatusBadge.jsx';
 import ConfirmDialog from '../common/ConfirmDialog.jsx';
 import UserFormDialog from './UserFormDialog.jsx';
 import CreditAdjustDialog from './CreditAdjustDialog.jsx';
+import PurchaseHistoryDialog from './PurchaseHistoryDialog.jsx';
 import { adminApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
@@ -20,6 +21,7 @@ export default function Users() {
   const [editUser, setEditUser]       = useState(null);
   const [deleteUser, setDeleteUser]   = useState(null);
   const [creditUser, setCreditUser]   = useState(null);
+  const [purchaseUser, setPurchaseUser] = useState(null);
 
   const handleCreate = async (formData) => {
     await adminApi.createUser(formData);
@@ -52,7 +54,15 @@ export default function Users() {
     { id: 'id', label: 'ID' },
     { id: 'name', label: 'Name' },
     { id: 'email', label: 'Email', render: (row) => <Typography variant="body2" fontFamily="monospace" fontSize="0.75rem">{row.email}</Typography> },
-    { id: 'role', label: 'Role', render: (row) => <StatusBadge status={row.role === 'admin' ? 'active' : 'offline'} label={row.role} /> },
+    { id: 'role', label: 'Role', render: (row) => {
+      // super_admin gets a distinct "active-plus" look via the success label
+      // so it stands out from plain admin / user rows.
+      const status = row.role === 'super_admin' ? 'active'
+                   : row.role === 'admin'       ? 'active'
+                   :                              'offline';
+      const label  = row.role === 'super_admin' ? 'super admin' : row.role;
+      return <StatusBadge status={status} label={label} />;
+    }},
     { id: 'credits', label: 'Credits', align: 'center', render: (row) => (
       <Chip label={row.credits} size="small" variant="outlined" color={row.credits > 0 ? 'primary' : 'default'} />
     )},
@@ -66,13 +76,15 @@ export default function Users() {
     { id: 'status', label: 'Status', render: (row) => row.status ? <Chip label={row.status} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} /> : <Typography variant="caption" color="text.disabled">—</Typography> },
     { id: 'flags', label: 'Modules', render: (row) => {
       const f = row.feature_flags || {};
-      const active = Object.entries(f).filter(([, v]) => v).map(([k]) => k);
-      const count = active.filter(k => !k.startsWith('dev')).length;
+      const userFlags = Object.entries(f).filter(([k, v]) => v && !k.startsWith('dev')).map(([k]) => k);
       const devOn = f.dev;
       return (
-        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-          <Chip label={`${count} modules`} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+          {userFlags.map((flag) => (
+            <Chip key={flag} label={flag} size="small" variant="outlined" sx={{ fontSize: '0.6rem' }} />
+          ))}
           {devOn && <Chip label="DEV" size="small" color="warning" variant="outlined" sx={{ fontSize: '0.6rem' }} />}
+          {userFlags.length === 0 && !devOn && <Typography variant="caption" color="text.disabled">none</Typography>}
         </Box>
       );
     }},
@@ -81,6 +93,7 @@ export default function Users() {
       id: 'actions', label: '', align: 'right',
       render: (row) => (
         <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+          <Button size="small" onClick={() => setPurchaseUser(row)}>Purchases</Button>
           <Button size="small" onClick={() => setCreditUser(row)}>Credits</Button>
           <Button size="small" onClick={() => setEditUser(row)}>Edit</Button>
           <Button size="small" color="error" onClick={() => setDeleteUser(row)}>Delete</Button>
@@ -111,6 +124,7 @@ export default function Users() {
       <UserFormDialog open={createOpen} onClose={() => setCreateOpen(false)} onSubmit={handleCreate} />
       <UserFormDialog open={!!editUser} onClose={() => setEditUser(null)} onSubmit={handleUpdate} user={editUser} />
       <CreditAdjustDialog open={!!creditUser} onClose={() => setCreditUser(null)} onSubmit={handleAdjustCredits} user={creditUser} />
+      <PurchaseHistoryDialog open={!!purchaseUser} onClose={() => setPurchaseUser(null)} user={purchaseUser} />
       <ConfirmDialog
         open={!!deleteUser}
         title="Delete User"

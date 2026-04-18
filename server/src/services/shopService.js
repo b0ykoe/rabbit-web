@@ -37,10 +37,11 @@ export async function purchaseNewLicense(db, userId, product) {
     }
     await trx('users').where('id', userId).update({ credits: user.credits - product.credits_cost });
 
-    // Create license
+    // Create license — NOT assigned to user, stored as bought key
     await trx('licenses').insert({
       license_key:  key,
-      user_id:      userId,
+      user_id:      null,
+      purchased_by: userId,
       max_sessions: product.max_sessions || 1,
       active:       true,
       expires_at:   expiresAt,
@@ -68,8 +69,8 @@ export async function extendLicense(db, userId, licenseKey, product) {
     if (!license) throw new Error('License not found or not owned by you');
     if (!license.active) throw new Error('License is revoked');
 
-    // Already lifetime — extending to lifetime again is a no-op, but charge anyway? No.
-    if (!license.expires_at && !product.duration_days) {
+    // Already lifetime — no extension makes sense (would downgrade or no-op)
+    if (!license.expires_at) {
       throw new Error('License is already lifetime');
     }
 
@@ -96,4 +97,33 @@ export async function extendLicense(db, userId, licenseKey, product) {
   });
 
   return { expires_at: newExpiry };
+}
+
+/**
+ * Purchase a module (enable a feature flag).
+ * @param {import('knex').Knex} db
+ * @param {number} userId
+ * @param {object} product - from shop.json, must have flag_key
+ * @returns {Promise<{ flag_key: string, enabled: boolean }>}
+ */
+export async function purchaseModule(db, userId, product) {
+  await db.transaction(async (trx) => {
+    const user = await trx('users').where('id', userId).forUpdate().first();
+    if (user.credits < product.credits_cost) {
+      throw new Error('Insufficient credits');
+    }
+
+    const flags = user.feature_flags ? (typeof user.feature_flags === 'string' ? JSON.parse(user.feature_flags) : user.feature_flags) : {};
+    if (flags[product.flag_key]) {
+      throw new Error('Module already owned');
+    }
+
+    flags[product.flag_key] = true;
+    await trx('users').where('id', userId).update({
+      credits: user.credits - product.credits_cost,
+      feature_flags: JSON.stringify(flags),
+    });
+  });
+
+  return { flag_key: product.flag_key, enabled: true };
 }

@@ -3,6 +3,7 @@ import db from '../db.js';
 import { config } from '../config.js';
 import { recordAudit } from '../services/auditLog.js';
 import { archiveSession } from '../services/licenseService.js';
+import { isSuperAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -30,22 +31,31 @@ router.get('/', async (req, res) => {
   // Filter: ?status=active (default) or ?status=archived or ?status=all
   const statusFilter = req.query.status || 'active';
 
+  // IP columns are only exposed to super-admins. Plain admins see all
+  // other session metadata but not per-session IPs.
+  const canSeeIp = isSuperAdmin(req);
+  const selectCols = [
+    'bot_sessions.session_id',
+    'bot_sessions.license_key',
+    'bot_sessions.hwid',
+    'bot_sessions.started_at',
+    'bot_sessions.last_heartbeat',
+    'bot_sessions.active',
+    'bot_sessions.ended_at',
+    'bot_sessions.end_reason',
+    'bot_sessions.stats_json',
+    'users.name as user_name',
+    'users.email as user_email',
+  ];
+  if (canSeeIp) {
+    selectCols.push('bot_sessions.ip_address',
+                    'bot_sessions.last_ip_address');
+  }
+
   let query = db('bot_sessions')
     .join('licenses', 'bot_sessions.license_key', 'licenses.license_key')
     .leftJoin('users', 'licenses.user_id', 'users.id')
-    .select(
-      'bot_sessions.session_id',
-      'bot_sessions.license_key',
-      'bot_sessions.hwid',
-      'bot_sessions.started_at',
-      'bot_sessions.last_heartbeat',
-      'bot_sessions.active',
-      'bot_sessions.ended_at',
-      'bot_sessions.end_reason',
-      'bot_sessions.stats_json',
-      'users.name as user_name',
-      'users.email as user_email',
-    );
+    .select(...selectCols);
 
   if (statusFilter === 'active')   query = query.where('bot_sessions.active', true);
   if (statusFilter === 'archived') query = query.where('bot_sessions.active', false);

@@ -52,6 +52,13 @@ export const adminApi = {
     const qs = new URLSearchParams(params).toString();
     return apiFetch(`/api/admin/audit?${qs}`);
   },
+
+  // Purchase history
+  getUserPurchases: (id, page = 1) => apiFetch(`/api/admin/users/${id}/purchases?page=${page}`),
+
+  // Settings
+  getSettings:    ()           => apiFetch('/api/admin/settings'),
+  updateSetting:  (key, data)  => apiFetch(`/api/admin/settings/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────
@@ -65,4 +72,5 @@ export const portalApi = {
   purchase:     (data) => apiFetch('/api/portal/shop/purchase', { method: 'POST', body: JSON.stringify(data) }),
   resetHwid:    (data) => apiFetch('/api/portal/reset-hwid', { method: 'POST', body: JSON.stringify(data) }),
   getStatuses:  () => apiFetch('/api/portal/statuses'),
+  getSessions:  (page = 1, status = 'all') => apiFetch(`/api/portal/sessions?page=${page}&status=${status}`),
 };

@@ -1,15 +1,20 @@
 /**
  * Bot token validation middleware.
  * Verifies Ed25519-signed tokens from request body or Authorization header.
+ *
+ * Beyond signature + expiry (handled by verifyToken), we also enforce:
+ *   - jti not present in token_blocklist   (W-1, per-token revocation)
+ *   - tvr matches the principal's current token_version (W-2, bulk revocation)
  */
 
 import { verifyToken } from '../crypto/ed25519.js';
 import { config } from '../config.js';
 import db from '../db.js';
+import { isJtiBlocked, isTokenVersionCurrent } from '../services/tokenSecurity.js';
 
 /**
- * Validate session token from request body (for download endpoints).
- * Attaches decoded payload and raw token to req.botToken / req.botTokenRaw.
+ * Validate a bot session token (payload {key, session_id, jti, tvr, exp,…}).
+ * Also verifies replay + revocation state.
  */
 export async function validateBotToken(req, res, next) {
   const tokenB64 = req.body?.token;
@@ -22,7 +27,18 @@ export async function validateBotToken(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  req.botToken    = result.payload;
+  const { payload } = result;
+
+  if (payload.jti && await isJtiBlocked(db, payload.jti)) {
+    return res.status(401).json({ error: 'Token revoked' });
+  }
+
+  if (payload.key &&
+      !(await isTokenVersionCurrent(db, 'license', payload.key, payload.tvr))) {
+    return res.status(401).json({ error: 'Token version outdated' });
+  }
+
+  req.botToken    = payload;
   req.botTokenRaw = result.raw;
   next();
 }
@@ -44,11 +60,20 @@ export async function validateBotUserToken(req, res, next) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  if (result.payload.type !== 'user' || !result.payload.user_id) {
+  const { payload } = result;
+  if (payload.type !== 'user' || !payload.user_id) {
     return res.status(401).json({ error: 'Invalid token type' });
   }
 
-  const user = await db('users').where('id', result.payload.user_id).first();
+  if (payload.jti && await isJtiBlocked(db, payload.jti)) {
+    return res.status(401).json({ error: 'Token revoked' });
+  }
+
+  if (!(await isTokenVersionCurrent(db, 'user', payload.user_id, payload.tvr))) {
+    return res.status(401).json({ error: 'Token version outdated' });
+  }
+
+  const user = await db('users').where('id', payload.user_id).first();
   if (!user) {
     return res.status(401).json({ error: 'User not found' });
   }
@@ -57,6 +82,7 @@ export async function validateBotUserToken(req, res, next) {
     id:               user.id,
     name:             user.name,
     email:            user.email,
+    role:             user.role,
     credits:          user.credits || 0,
     allowed_channels: user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'],
   };

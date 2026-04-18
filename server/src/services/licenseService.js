@@ -51,3 +51,25 @@ export async function archiveSessionsByKey(db, licenseKey, reason) {
   return db('bot_sessions').where('license_key', licenseKey).where('active', true)
     .update({ active: false, ended_at: now, end_reason: reason });
 }
+
+/**
+ * Archive the single oldest active session for a license key (by
+ * `started_at`). Used by /auth/start when the license is at its
+ * max_sessions limit and `killOldestOnOverflow` policy is in effect.
+ *
+ * Returns the number of rows archived (0 or 1). Safe to call when no
+ * active sessions exist — it will simply no-op.
+ */
+export async function archiveOldestSessionByKey(db, licenseKey, reason) {
+  const now = Math.floor(Date.now() / 1000);
+  const oldest = await db('bot_sessions')
+    .where('license_key', licenseKey)
+    .where('active', true)
+    .orderBy('started_at', 'asc')
+    .select('session_id')
+    .first();
+  if (!oldest) return 0;
+  return db('bot_sessions')
+    .where('session_id', oldest.session_id)
+    .update({ active: false, ended_at: now, end_reason: reason });
+}

@@ -74,7 +74,8 @@ export default function Licenses() {
     { id: 'status', label: 'Status', render: (row) => <StatusBadge status={row.active ? 'active' : 'revoked'} /> },
     { id: 'expiry', label: 'Expiry', render: (row) => <ExpiryBadge expiresAt={row.expires_at} /> },
     { id: 'user', label: 'User', render: (row) => row.user_name || <Typography variant="caption" color="text.disabled">unassigned</Typography> },
-    { id: 'hwid', label: 'HWID', render: (row) => row.bound_hwid ? <Typography variant="caption" fontFamily="monospace" color="text.secondary">{row.bound_hwid.slice(0, 12)}...</Typography> : <Typography variant="caption" color="text.disabled">—</Typography> },
+    { id: 'purchased_by', label: 'Purchased By', render: (row) => row.purchased_by_name || <Typography variant="caption" color="text.disabled">—</Typography> },
+    { id: 'hwid', label: 'HWID', render: (row) => row.bound_hwid ? <CopyableText text={row.bound_hwid} /> : <Typography variant="caption" color="text.disabled">—</Typography> },
     {
       id: 'sessions', label: 'Sessions', align: 'center',
       render: (row) => (

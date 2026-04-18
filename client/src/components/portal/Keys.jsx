@@ -5,6 +5,7 @@ import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import RedeemIcon from '@mui/icons-material/Redeem';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import StatusBadge from '../common/StatusBadge.jsx';
 import ExpiryBadge from '../common/ExpiryBadge.jsx';
 import CopyableText from '../common/CopyableText.jsx';
@@ -78,9 +79,25 @@ export default function Keys() {
     }
   };
 
+  const [redeemingBought, setRedeemingBought] = useState(null);
+
+  const handleRedeemBought = async (key) => {
+    setRedeemingBought(key);
+    try {
+      await portalApi.redeemKey({ key });
+      showSnackbar('Key redeemed successfully!');
+      refetch();
+    } catch (err) {
+      showSnackbar(err.data?.error || 'Failed to redeem key', 'error');
+    } finally {
+      setRedeemingBought(null);
+    }
+  };
+
   if (loading) return null;
 
   const licenses = data?.licenses || [];
+  const boughtKeys = data?.boughtKeys || [];
 
   return (
     <Box>
@@ -104,7 +121,50 @@ export default function Keys() {
         </Button>
       </Paper>
 
-      {licenses.length === 0 && (
+      {/* Bought Keys (purchased but not redeemed) */}
+      {boughtKeys.length > 0 && (
+        <>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Bought Keys
+          </Typography>
+          <Paper sx={{ mb: 3 }}>
+            {boughtKeys.map((k) => (
+              <Box
+                key={k.license_key}
+                sx={{
+                  p: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  flexWrap: 'wrap',
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                  '&:last-child': { borderBottom: 'none' },
+                }}
+              >
+                <CopyableText text={k.license_key} />
+                <ExpiryBadge expiresAt={k.expires_at} />
+                {k.note && (
+                  <Typography variant="caption" color="text.disabled">{k.note}</Typography>
+                )}
+                <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<RedeemIcon />}
+                    disabled={redeemingBought === k.license_key}
+                    onClick={() => handleRedeemBought(k.license_key)}
+                  >
+                    {redeemingBought === k.license_key ? 'Redeeming...' : 'Redeem'}
+                  </Button>
+                </Box>
+              </Box>
+            ))}
+          </Paper>
+        </>
+      )}
+
+      {licenses.length === 0 && boughtKeys.length === 0 && (
         <Paper sx={{ p: 6, textAlign: 'center' }}>
           <Typography color="text.disabled">No license keys assigned to your account.</Typography>
           <Typography variant="caption" color="text.disabled">Redeem a key above or visit the shop.</Typography>
@@ -129,8 +189,8 @@ export default function Keys() {
                 Sessions: <strong>{lic.liveSessions?.length || 0}</strong> / {lic.max_sessions}
               </Typography>
               {lic.bound_hwid && (
-                <Typography variant="caption" fontFamily="monospace" color="text.disabled">
-                  HWID: {lic.bound_hwid.slice(0, 20)}...
+                <Typography variant="caption" fontFamily="monospace" color="text.disabled" sx={{ wordBreak: 'break-all' }}>
+                  HWID: {lic.bound_hwid}
                 </Typography>
               )}
               {lic.note && (
@@ -167,9 +227,7 @@ export default function Keys() {
                 {lic.liveSessions.map((s) => (
                   <Box key={s.session_id} sx={{ py: 0.75 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-                      <Typography variant="caption" fontFamily="monospace" color="text.secondary" sx={{ minWidth: 140 }}>
-                        {s.session_id.slice(0, 16)}...
-                      </Typography>
+                      <CopyableText text={s.session_id} />
                       <Typography variant="caption" fontFamily="monospace" color="text.secondary">
                         HWID: {s.hwid || 'N/A'}
                       </Typography>
@@ -207,9 +265,7 @@ export default function Keys() {
                 </Typography>
                 {lic.archivedSessions.slice(0, 5).map((s) => (
                   <Box key={s.session_id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5 }}>
-                    <Typography variant="caption" fontFamily="monospace" color="text.disabled">
-                      {s.session_id.slice(0, 12)}...
-                    </Typography>
+                    <CopyableText text={s.session_id} />
                     <Typography variant="caption" fontFamily="monospace" color="text.disabled">
                       {s.hwid || 'no HWID'}
                     </Typography>
@@ -253,7 +309,7 @@ export default function Keys() {
       <ConfirmDialog
         open={!!killSessionId}
         title="Kill Session"
-        message={`Terminate session ${killSessionId?.slice(0, 16)}...? The bot will lose connection on the next heartbeat.`}
+        message={`Terminate session ${killSessionId}? The bot will lose connection on the next heartbeat.`}
         onConfirm={handleKillSession}
         onCancel={() => setKillSessionId(null)}
         confirmText="Kill"

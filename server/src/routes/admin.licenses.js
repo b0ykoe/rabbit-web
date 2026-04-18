@@ -17,9 +17,11 @@ router.get('/', async (req, res) => {
   const [rows, countResult] = await Promise.all([
     db('licenses')
       .leftJoin('users', 'licenses.user_id', 'users.id')
+      .leftJoin('users as purchaser', 'licenses.purchased_by', 'purchaser.id')
       .select(
         'licenses.license_key',
         'licenses.user_id',
+        'licenses.purchased_by',
         'licenses.max_sessions',
         'licenses.active',
         'licenses.note',
@@ -28,6 +30,7 @@ router.get('/', async (req, res) => {
         'licenses.created_at',
         'users.name as user_name',
         'users.email as user_email',
+        'purchaser.name as purchased_by_name',
       )
       .orderBy('licenses.created_at', 'desc')
       .limit(limit)

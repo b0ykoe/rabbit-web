@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.10.0] — Feature-flag parity + role hierarchy + session security
+
+### Added
+- **`super_admin` role** — new top-tier role above `admin`. Only super-admins can create/promote admin or super_admin accounts (enforced in `admin.users.js` via `checkRoleAssignmentAllowed`, mirrored client-side in `UserFormDialog.jsx`). Super-admins bypass the entire feature-flag system — the bot receives every flag as `true` regardless of persisted `feature_flags` JSON.
+- **IP logging per bot session** — `bot_sessions.ip_address` (initial) + `bot_sessions.last_ip_address` (updated every heartbeat). Both columns surface in the admin sessions list **only for super-admins** (server strips them from the JSON for plain admins). IP drift between heartbeats emits a `session.ip_changed` audit-log row.
+- **Concurrent-session enforcement** — `/api/bot/auth/start` now counts active sessions for the license key; when at `max_sessions`, the oldest active session is archived with `end_reason='session_overflow'` (new `archiveOldestSessionByKey` helper) so the new login succeeds. Super-admins skip the check entirely. Audit entry per overflow-kill.
+- **Feature-flag parity with the bot DLL** — admin UI `FEATURE_FLAG_GROUPS` now lists all 27 flags the bot understands. Added: `inventory`, `buffs`, `consumables` (user, default off via `SHOP_MODULES`) and `dev_terrain`, `dev_debug`, `dev_chat`, `dev_inventory`, `dev_buffs`, `dev_anticheat`, `dev_packets` (dev).
+- **`is_super_admin` in `/api/bot/auth/login` response** — bot can display a super-admin badge if desired.
+- **Super-admin badge on user list** — client Users page renders "super admin" label in a distinct color.
+
+### Changed
+- `requireAdmin` middleware now accepts both `admin` AND `super_admin` roles.
+- User form role selector hides the Admin / Super Admin options unless the session user is super-admin (plain admins only get "User" in the dropdown with a helper text).
+- Validation schemas `createUserSchema` + `updateUserSchema` accept `super_admin`.
+
+### New Files
+- `server/migrations/015_add_super_admin_role.js` — extends `users.role` enum to `['super_admin', 'admin', 'user']`.
+- `server/migrations/016_bot_sessions_ip.js` — adds `ip_address` + `last_ip_address` to `bot_sessions`.
+
+### Notes
+- Rate limiting on auth endpoints was already implemented at the right thresholds (10/min on login+start, 600/min on heartbeat) — no changes needed there.
+- Heartbeat-timeout cleanup already runs every 60 s via `startSessionCleanup` in `sessionCleanup.js` — no changes needed there.
+- No bot DLL changes: `ParseFeatureFlags` ignores unknown keys and defaults missing ones to `false`, so the bot transparently picks up new flag state when admins toggle them.
+
 ## [0.9.0] - 2026-04-12
 
 ### Added

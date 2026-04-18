@@ -3,8 +3,20 @@ import bcrypt from 'bcryptjs';
 import db from '../db.js';
 import { recordAudit } from '../services/auditLog.js';
 import { validate, createUserSchema, updateUserSchema, adjustCreditsSchema } from '../validation/schemas.js';
+import { isSuperAdmin } from '../middleware/auth.js';
 
 const router = Router();
+
+/**
+ * Only super-admins may assign the `admin` or `super_admin` role. Plain
+ * admins can create/promote user accounts up to `user` role only.
+ * Returns a 403-response object if the caller is not permitted, else null.
+ */
+function checkRoleAssignmentAllowed(req, targetRole) {
+  if (!targetRole || targetRole === 'user') return null;
+  if (isSuperAdmin(req)) return null;
+  return { status: 403, body: { error: 'Only super_admin can assign admin roles' } };
+}
 
 // GET /api/admin/users — paginated list
 router.get('/', async (req, res) => {
@@ -48,6 +60,10 @@ router.get('/', async (req, res) => {
 router.post('/', validate(createUserSchema), async (req, res) => {
   const { name, email, password, role, allowed_channels, status, hwid_reset_enabled, feature_flags } = req.validated;
 
+  // Only super-admins can create admin or super_admin accounts.
+  const denied = checkRoleAssignmentAllowed(req, role);
+  if (denied) return res.status(denied.status).json(denied.body);
+
   const exists = await db('users').where('email', email).first();
   if (exists) {
     return res.status(422).json({ errors: { email: ['Email already in use'] } });
@@ -79,6 +95,17 @@ router.patch('/:id', validate(updateUserSchema), async (req, res) => {
   const updates = {};
   const oldValues = {};
   const newValues = {};
+
+  // Role changes gated by super-admin. Also prevent a super-admin from
+  // demoting themselves via this endpoint (would lock out their own
+  // access); a super-admin must be demoted by another super-admin.
+  if (req.validated.role !== undefined && req.validated.role !== user.role) {
+    const denied = checkRoleAssignmentAllowed(req, req.validated.role);
+    if (denied) return res.status(denied.status).json(denied.body);
+    if (Number(id) === req.session.user.id && user.role === 'super_admin') {
+      return res.status(422).json({ error: 'Cannot demote your own super_admin role' });
+    }
+  }
 
   for (const field of ['name', 'email', 'role', 'status']) {
     if (req.validated[field] !== undefined && req.validated[field] !== user[field]) {
@@ -174,6 +201,42 @@ router.delete('/:id', async (req, res) => {
   });
 
   res.json({ message: 'User deleted' });
+});
+
+// GET /api/admin/users/:id/purchases — purchase history for a user
+router.get('/:id/purchases', async (req, res) => {
+  const { id } = req.params;
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const perPage = 25;
+
+  const query = db('audit_logs')
+    .where('user_id', id)
+    .whereIn('action', ['shop.purchase', 'shop.extend', 'shop.purchase_module']);
+
+  const [{ count }] = await query.clone().count('* as count');
+  const total = Number(count);
+  const totalPages = Math.ceil(total / perPage);
+
+  const rows = await query.clone()
+    .orderBy('created_at', 'desc')
+    .offset((page - 1) * perPage)
+    .limit(perPage)
+    .select('id', 'action', 'subject_type', 'subject_id', 'new_values', 'created_at');
+
+  const data = rows.map((r) => {
+    let newValues = {};
+    try { newValues = r.new_values ? JSON.parse(r.new_values) : {}; } catch { /* empty */ }
+    return {
+      id: r.id,
+      action: r.action,
+      subject_id: r.subject_id,
+      product_name: newValues.product_name || null,
+      credits_cost: newValues.credits_cost || null,
+      created_at: r.created_at,
+    };
+  });
+
+  res.json({ data, total, totalPages });
 });
 
 export default router;

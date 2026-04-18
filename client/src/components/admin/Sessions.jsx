@@ -8,6 +8,7 @@ import ConfirmDialog from '../common/ConfirmDialog.jsx';
 import { adminApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { formatDuration } from '../../utils/format.js';
 
 function timeAgo(ts) {
@@ -23,6 +24,10 @@ export default function Sessions() {
   const [statusFilter, setStatusFilter] = useState('active');
   const { data, loading, refetch } = useApi(() => adminApi.getSessions(page, statusFilter), [page, statusFilter]);
   const { showSnackbar } = useSnackbar();
+  const { user: me } = useAuth();
+  // IP addresses are only exposed to super-admins (server strips them
+  // from the response for plain admins, so this is also a display gate).
+  const canSeeIp = me?.role === 'super_admin';
   const [killTarget, setKillTarget] = useState(null);
 
   useEffect(() => {
@@ -64,6 +69,25 @@ export default function Sessions() {
         ? <Tooltip title={row.user_email}><Typography variant="body2">{row.user_name}</Typography></Tooltip>
         : <Typography variant="caption" color="text.disabled">unassigned</Typography>,
     },
+    // IP column — super-admin only. The server side also redacts these
+    // fields for non-super-admin viewers (belt-and-braces).
+    ...(canSeeIp ? [{
+      id: 'ip', label: 'IP',
+      render: (row) => {
+        const primary = row.ip_address;
+        const last    = row.last_ip_address;
+        if (!primary && !last) return <Typography variant="caption" color="text.disabled">—</Typography>;
+        const drifted = primary && last && primary !== last;
+        return (
+          <Tooltip title={drifted ? `start: ${primary}` : ''}>
+            <Typography variant="caption" fontFamily="monospace"
+                        color={drifted ? 'warning.main' : 'text.secondary'}>
+              {last || primary}
+            </Typography>
+          </Tooltip>
+        );
+      },
+    }] : []),
     {
       id: 'runtime', label: 'Runtime',
       render: (row) => (
@@ -156,7 +180,7 @@ export default function Sessions() {
       <ConfirmDialog
         open={!!killTarget}
         title="Kill Session"
-        message={`Terminate session ${killTarget?.slice(0, 16)}...? The bot will disconnect on the next heartbeat.`}
+        message={`Terminate session ${killTarget}? The bot will disconnect on the next heartbeat.`}
         onConfirm={handleKill}
         onCancel={() => setKillTarget(null)}
         confirmText="Kill"

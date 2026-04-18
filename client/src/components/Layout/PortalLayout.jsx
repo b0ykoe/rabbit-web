@@ -8,6 +8,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 const navItems = [
   { label: 'Dashboard', path: '/portal' },
   { label: 'My Keys',   path: '/portal/keys' },
+  { label: 'Sessions',  path: '/portal/sessions' },
   { label: 'Shop',      path: '/portal/shop' },
 ];
 

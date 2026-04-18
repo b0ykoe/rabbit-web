@@ -65,7 +65,13 @@ router.get('/', async (req, res) => {
     lic.archivedSessions = archivedSessions.filter(s => s.license_key === lic.license_key);
   }
 
-  res.json({ licenses });
+  // Bought but unredeemed keys
+  const boughtKeys = await db('licenses')
+    .where({ purchased_by: userId, active: true })
+    .whereNull('user_id')
+    .select('license_key', 'expires_at', 'max_sessions', 'note', 'created_at');
+
+  res.json({ licenses, boughtKeys });
 });
 
 export default router;
