@@ -1,5 +1,12 @@
 import { apiFetch } from './client.js';
 
+// ── Meta ─────────────────────────────────────────────────────────────────────
+
+export const metaApi = {
+  // Public — returns { version } of the running server build.
+  getVersion: () => apiFetch('/api/version'),
+};
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 export const authApi = {

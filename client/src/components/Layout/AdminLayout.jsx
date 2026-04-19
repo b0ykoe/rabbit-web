@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
-  Typography, Divider,
+  Typography, Divider, Tooltip,
 } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import PeopleIcon from '@mui/icons-material/People';
@@ -14,6 +15,7 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { metaApi } from '../../api/endpoints.js';
 
 const DRAWER_WIDTH = 224;
 
@@ -32,6 +34,16 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
+  const [serverVersion, setServerVersion] = useState(null);
+
+  // One-shot probe of the running server build. Surfacing this next to the
+  // client version makes version-mismatch deploys (server updated, client
+  // still cached) trivially obvious at a glance.
+  useEffect(() => {
+    metaApi.getVersion()
+      .then((r) => setServerVersion(r?.version || null))
+      .catch(() => setServerVersion(null));
+  }, []);
 
   const handleLogout = async () => {
     await logout();
@@ -112,6 +124,20 @@ export default function AdminLayout() {
             </ListItemIcon>
             <ListItemText primary="Log out" primaryTypographyProps={{ fontSize: '0.8125rem' }} />
           </ListItemButton>
+          <Tooltip
+            title={`Client v${__APP_VERSION__} · Server ${serverVersion ? 'v' + serverVersion : '(offline)'}`}
+            placement="top"
+          >
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ px: 1, pt: 1, display: 'block', fontSize: '0.7rem', lineHeight: 1.4 }}
+            >
+              client v{__APP_VERSION__}
+              <br />
+              server {serverVersion ? 'v' + serverVersion : '…'}
+            </Typography>
+          </Tooltip>
         </Box>
       </Drawer>
 

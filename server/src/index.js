@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import db from './db.js';
@@ -39,6 +40,14 @@ import portalSessionsRoutes from './routes/portal.sessions.js';
 import adminSettingsRoutes  from './routes/admin.settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read our own version from server/package.json — exposed at boot-time
+// via the /api/version endpoint and printed to the startup log so ops
+// can confirm which build is actually running.
+const SERVER_VERSION = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../package.json'), 'utf-8')
+).version;
+
 const app = express();
 app.set('trust proxy', 1);   // Cloudflare → CloudPanel/Nginx → Node
 
@@ -88,6 +97,12 @@ app.use('/api/bot/config',         botConfigLimiter);
 app.use('/api/auth',               webAuthLimiter);
 app.use('/api/admin',              adminLimiter);
 app.use('/api/portal',             portalLimiter);
+
+// ── Public: version probe (no auth, no CSRF) ────────────────────────────────
+
+app.get('/api/version', (_req, res) => {
+  res.json({ version: SERVER_VERSION });
+});
 
 // ── Bot API Routes (stateless, no session/CSRF) ─────────────────────────────
 
@@ -167,7 +182,7 @@ app.use((err, req, res, _next) => {
 
 const port = config.port;
 app.listen(port, () => {
-  console.log(`[server] Rabbit running on http://localhost:${port}`);
+  console.log(`[server] Rabbit v${SERVER_VERSION} running on http://localhost:${port}`);
   console.log(`[server] Environment: ${config.env}`);
 });
 

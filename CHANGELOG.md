@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.1] — Version-Anzeige in Admin-Panel + Server-Boot-Log
+
+### Added
+
+- Beide `package.json` (client + server) tragen jetzt ein echtes
+  `"version"`-Feld (`0.13.0` aligned mit dem CHANGELOG).
+- **Server loggt beim Boot seine Version**: `[server] Rabbit v0.13.0
+  running on http://localhost:3000` — Ops sieht auf einen Blick ob
+  das Deploy durchgekommen ist.
+- **Neuer public Endpoint `GET /api/version`** → `{ version }` (keine
+  Auth, kein CSRF, rate-limit-frei — sehr billig, der Linter in der
+  Sidebar feuert ihn genau einmal pro Mount).
+- **Admin-Sidebar-Footer** zeigt jetzt `client v0.13.0 / server
+  v0.13.0`. Werte driften auseinander wenn Client-Build und Server-
+  Deploy nicht synchron sind — dann fällt's sofort auf statt erst bei
+  mysteriösen API-Errors.
+- Client-Version kommt aus `client/package.json` via Vite-`define`
+  (`__APP_VERSION__`) zum Build-Zeitpunkt, keine HTTP-Runde nötig.
+
 ## [0.13.0] — Admins können ihre eigene Portal-Seite nutzen
 
 ### Added
