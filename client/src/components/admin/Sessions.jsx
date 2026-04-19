@@ -192,6 +192,27 @@ export default function Sessions() {
         );
       },
     },
+    // Proxy column — at-a-glance indicator whether the session routed
+    // any traffic through a SOCKS5 profile. Click the Public icon in the
+    // actions column for the per-profile breakdown.
+    {
+      id: 'proxy', label: 'Proxy',
+      render: (row) => {
+        const count = row.proxy_count || 0;
+        const bytes = row.proxy_total_bytes || 0;
+        if (count === 0) {
+          return <Chip label="Direct" size="small" variant="outlined"
+                       sx={{ height: 20, fontSize: '0.7rem' }} />;
+        }
+        const label = count === 1 ? 'Proxied' : `Proxied (${count})`;
+        return (
+          <Tooltip title={`${formatBytes(bytes)} through ${count} profile${count === 1 ? '' : 's'}`}>
+            <Chip label={label} size="small" color="success" variant="outlined"
+                  sx={{ height: 20, fontSize: '0.7rem' }} />
+          </Tooltip>
+        );
+      },
+    },
     // IP column — super-admin only. The server side also redacts these
     // fields for non-super-admin viewers (belt-and-braces).
     ...(canSeeIp ? [{

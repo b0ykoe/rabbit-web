@@ -72,10 +72,22 @@ router.get('/', async (req, res) => {
                     'bot_sessions.last_ip_address');
   }
 
+  // Correlated subquery for proxy usage — cheaper than joining and grouping
+  // given typical small proxy_stats counts per session. Clients use these
+  // to render a "Direct" vs "Proxied" chip without fetching per-session.
+  const proxyCountSql = db('bot_proxy_stats')
+    .whereRaw('bot_proxy_stats.session_id = bot_sessions.session_id')
+    .count('* as c');
+  const proxyBytesSql = db('bot_proxy_stats')
+    .whereRaw('bot_proxy_stats.session_id = bot_sessions.session_id')
+    .sum(db.raw('bytes_sent + bytes_recv'));
+
   let query = db('bot_sessions')
     .join('licenses', 'bot_sessions.license_key', 'licenses.license_key')
     .leftJoin('users', 'licenses.user_id', 'users.id')
-    .select(...selectCols);
+    .select(...selectCols,
+            db.raw('(?) as proxy_count',       [proxyCountSql]),
+            db.raw('(?) as proxy_total_bytes', [proxyBytesSql]));
 
   if (statusFilter === 'active')   query = query.where('bot_sessions.active', true);
   if (statusFilter === 'archived') query = query.where('bot_sessions.active', false);
@@ -95,6 +107,9 @@ router.get('/', async (req, res) => {
     row.is_alive = row.active && row.last_heartbeat > cutoff;
     try { row.stats = row.stats_json ? JSON.parse(row.stats_json) : null; } catch { row.stats = null; }
     delete row.stats_json;
+    // Knex returns counts/sums as string on some drivers — normalize.
+    row.proxy_count       = Number(row.proxy_count) || 0;
+    row.proxy_total_bytes = Number(row.proxy_total_bytes) || 0;
   }
 
   res.json({

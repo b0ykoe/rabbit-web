@@ -33,6 +33,12 @@
   `config_type='ip-profiles'`. Ohne diesen Endpoint würde das
   Profile-Save des Bots in 404 laufen; bestehende `bot_configs`-Tabelle
   braucht keine Migration (VARCHAR(16) `config_type` reicht).
+- **"Proxy"-Spalte in der Sessions-Tabelle** (Admin-View). Zeigt auf
+  einen Blick ob eine Session direkt oder über einen SOCKS5-Proxy lief:
+  grauer "Direct"-Chip wenn keine `bot_proxy_stats`-Zeilen existieren,
+  grüner "Proxied (N)"-Chip bei N > 0 Profilen mit Tooltip "X MB
+  through N profile(s)". Sessions-Endpoint gibt `proxy_count` und
+  `proxy_total_bytes` per correlated subquery mit.
 
 ### Notes
 
