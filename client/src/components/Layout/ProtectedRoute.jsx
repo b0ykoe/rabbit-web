@@ -7,7 +7,9 @@ const isAdminRole = (r) => r === 'admin' || r === 'super_admin';
 /**
  * Auth guard wrapper. `role="admin"` admits both `admin` and `super_admin`
  * — super-admin is a superset of admin, matching the server's requireAdmin
- * middleware.
+ * middleware. `role="user"` admits regular users AND admins (admins have
+ * their own user-side accounts and can browse the portal as themselves);
+ * the server already allows this via requireAuth on /api/portal.
  * @param {object} props
  * @param {'admin'|'user'} [props.role] - required role (optional — any authenticated user if omitted)
  * @param {React.ReactNode} props.children
@@ -35,9 +37,11 @@ export default function ProtectedRoute({ role, children }) {
   }
 
   // Role mismatch → redirect to correct panel. `admin`-gated routes accept
-  // super_admin too; other roles match exactly.
+  // super_admin too; `user`-gated routes also admit admins (they can use
+  // the portal with their own account — no impersonation, just their own data).
   const ok = !role
     || (role === 'admin' && isAdminRole(user.role))
+    || (role === 'user'  && (user.role === 'user' || isAdminRole(user.role)))
     || user.role === role;
   if (!ok) {
     return <Navigate to={isAdminRole(user.role) ? '/admin' : '/portal'} replace />;

@@ -3,7 +3,10 @@ import {
   Box, AppBar, Toolbar, Typography, Button, Container, Chip,
 } from '@mui/material';
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { useAuth } from '../../context/AuthContext.jsx';
+
+const isAdminRole = (r) => r === 'admin' || r === 'super_admin';
 
 const navItems = [
   { label: 'Dashboard', path: '/portal' },
@@ -58,6 +61,18 @@ export default function PortalLayout() {
           />
           {user?.status && (
             <Chip label={user.status} size="small" variant="outlined" sx={{ mr: 2, fontSize: '0.65rem' }} />
+          )}
+          {isAdminRole(user?.role) && (
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              startIcon={<AdminPanelSettingsIcon sx={{ fontSize: 16 }} />}
+              onClick={() => navigate('/admin')}
+              sx={{ mr: 2, textTransform: 'none', fontSize: '0.75rem' }}
+            >
+              Admin
+            </Button>
           )}
           <Typography variant="caption" color="text.disabled" sx={{ mr: 2 }}>
             {user?.name}

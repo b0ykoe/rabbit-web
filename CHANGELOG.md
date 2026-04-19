@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.13.0] — Admins können ihre eigene Portal-Seite nutzen
+
+### Added
+
+- Admins (und Super-Admins) haben jetzt Zugriff auf **ihre eigene**
+  Portal-Seite (Dashboard, My Keys, Sessions, Shop) — mit ihren
+  eigenen Lizenzen, eigenen Sessions, eigenen Credits. Keine
+  Impersonation von fremden Usern, sondern einfach: ein Admin-
+  Account ist gleichzeitig ein ganz normaler User-Account, der
+  eigene Keys kaufen / redeemen / den Bot laufen lassen kann.
+- **Switch-Buttons** zwischen beiden Bereichen:
+  - In der Admin-Sidebar unten: „My Portal" → springt in die
+    Portal-Ansicht
+  - In der Portal-Toolbar rechts: „Admin"-Button (nur für Admins
+    sichtbar) → springt zurück ins Admin-Dashboard
+- [ProtectedRoute.jsx](client/src/components/Layout/ProtectedRoute.jsx)
+  lässt Admins durch `role="user"`-Guards durch. Server-seitig war
+  das schon erlaubt: `/api/portal/*` gatet nur via `requireAuth`,
+  nicht via Rollen-Check.
+
 ## [0.12.1] — Repair-Migration für bot_configs unique-Index
 
 ### Fixed

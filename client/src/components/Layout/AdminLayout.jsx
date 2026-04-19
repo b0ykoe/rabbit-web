@@ -12,6 +12,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import AnnouncementIcon from '@mui/icons-material/Announcement';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
+import StorefrontIcon from '@mui/icons-material/Storefront';
 import { useAuth } from '../../context/AuthContext.jsx';
 
 const DRAWER_WIDTH = 224;
@@ -96,6 +97,12 @@ export default function AdminLayout() {
 
         <Box sx={{ mt: 'auto', p: 1 }}>
           <Divider sx={{ mb: 1 }} />
+          <ListItemButton onClick={() => navigate('/portal')} sx={{ borderRadius: 1, mb: 0.5 }}>
+            <ListItemIcon sx={{ minWidth: 36, color: 'text.secondary' }}>
+              <StorefrontIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText primary="My Portal" primaryTypographyProps={{ fontSize: '0.8125rem' }} />
+          </ListItemButton>
           <Typography variant="caption" color="text.disabled" sx={{ px: 1 }}>
             {user?.email}
           </Typography>
