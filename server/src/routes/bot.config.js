@@ -93,4 +93,13 @@ router.get('/hwid',  validateBotToken, (req, res) => getConfig(req, res, 'hwid')
 router.put('/hwid',  validateBotToken, (req, res) => putConfig(req, res, 'hwid'));
 router.post('/hwid', validateBotToken, (req, res) => putConfig(req, res, 'hwid'));
 
+// SOCKS5 IP profiles. Stored as a single JSON blob per user (mirrors
+// how /hwid works for HWID profiles) — the blob shape is
+// `{active, killswitch, profiles: {name: {host,port,user,pass,...}}}`.
+// Same auth path, same bot_configs table. No char_name split; the user
+// is the scope.
+router.get('/ip-profiles',  validateBotToken, (req, res) => getConfig(req, res, 'ip-profiles'));
+router.put('/ip-profiles',  validateBotToken, (req, res) => putConfig(req, res, 'ip-profiles'));
+router.post('/ip-profiles', validateBotToken, (req, res) => putConfig(req, res, 'ip-profiles'));
+
 export default router;

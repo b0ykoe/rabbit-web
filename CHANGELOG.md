@@ -27,6 +27,12 @@
   Admin muss es pro User explizit freischalten. Kein Shop-Eintrag in
   [config/shop.json](server/config/shop.json) bislang; fügt der Admin
   einen hinzu sobald das Feature monetarisiert werden soll.
+- **Config-Endpoint `GET/PUT/POST /api/bot/config/ip-profiles`** in
+  [bot.config.js](server/src/routes/bot.config.js). Gleiches Muster wie
+  `/hwid` — ein JSON-Blob pro User in `bot_configs` mit
+  `config_type='ip-profiles'`. Ohne diesen Endpoint würde das
+  Profile-Save des Bots in 404 laufen; bestehende `bot_configs`-Tabelle
+  braucht keine Migration (VARCHAR(16) `config_type` reicht).
 
 ### Notes
 
