@@ -263,7 +263,7 @@ router.post('/heartbeat',
   validateBotToken,
   botHeartbeatSessionLimiter,
   async (req, res) => {
-  const { session_id, stats, server_ip, server_port, server_variant } = req.validated;
+  const { session_id, stats, server_ip, server_port, server_variant, proxy_stats } = req.validated;
   const tp = req.botToken;
 
   if (tp.session_id !== session_id) {
@@ -294,6 +294,28 @@ router.post('/heartbeat',
   if (server_port)    updateData.game_server_port    = server_port;
   if (server_variant) updateData.game_server_variant = server_variant;
   await db('bot_sessions').where('session_id', session_id).update(updateData);
+
+  // Per-proxy stats — latest-wins upsert keyed by (session_id, profile_name).
+  // Bot sends cumulative values per heartbeat; no aggregation needed here.
+  if (Array.isArray(proxy_stats) && proxy_stats.length > 0) {
+    for (const p of proxy_stats) {
+      await db('bot_proxy_stats')
+        .insert({
+          session_id,
+          license_key:    session.license_key,
+          profile_name:   p.profile,
+          host:           p.host || null,
+          port:           p.port || null,
+          bytes_sent:     p.bytes_sent,
+          bytes_recv:     p.bytes_recv,
+          sockets_active: p.sockets_active,
+          sockets_total:  p.sockets_total,
+          recorded_at:    now,
+        })
+        .onConflict(['session_id', 'profile_name'])
+        .merge();
+    }
+  }
 
   // IP drift detector — any time the heartbeat comes from a different IP
   // than we saw last tick, record an audit event. Only fires on actual

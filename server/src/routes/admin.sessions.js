@@ -7,6 +7,21 @@ import { isSuperAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
+// GET /api/admin/sessions/:sessionId/proxy-stats — per-profile SOCKS5 byte
+// counters reported by the bot over the session's lifetime. Ordered by
+// most bytes (sent+recv) so the highest-traffic proxies show first.
+router.get('/:sessionId/proxy-stats', async (req, res) => {
+  const { sessionId } = req.params;
+  const rows = await db('bot_proxy_stats')
+    .where('session_id', sessionId)
+    .orderByRaw('(bytes_sent + bytes_recv) desc')
+    .select('profile_name', 'host', 'port',
+            'bytes_sent', 'bytes_recv',
+            'sockets_active', 'sockets_total',
+            'recorded_at');
+  res.json({ data: rows });
+});
+
 // DELETE /api/admin/sessions/:sessionId — kill (archive) a bot session
 router.delete('/:sessionId', async (req, res) => {
   const { sessionId } = req.params;

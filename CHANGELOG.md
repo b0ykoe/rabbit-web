@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.14.0] — Per-Proxy-Traffic-Stats in Session-View
+
+### Added
+
+- **`proxy_stats`-Feld im `/api/bot/auth/heartbeat`-Body**. Bot v1.9.2
+  sendet bei jedem Heartbeat ein Array `[{profile, host, port,
+  bytes_sent, bytes_recv, sockets_active, sockets_total}]` — eine Zeile
+  pro SOCKS5-Profil, das in der Session Traffic gesehen hat. Zod-Schema
+  in [`validation/schemas.js`](server/src/validation/schemas.js),
+  Persistenz per upsert auf `(session_id, profile_name)`. Credentials
+  (`user`/`pass`) werden nie vom Client gesendet und existieren serverseitig
+  ebenfalls nicht.
+- **Neue Tabelle `bot_proxy_stats`** (Migration
+  [023_bot_proxy_stats.js](server/migrations/023_bot_proxy_stats.js)) —
+  latest-wins pro `(session_id, profile_name)`. Einfaches
+  `.onConflict().merge()` pro Heartbeat.
+- **Admin-Endpoint `GET /api/admin/sessions/:sessionId/proxy-stats`** —
+  liefert alle Profile dieser Session sortiert nach `bytes_sent +
+  bytes_recv` desc, damit der traffic-stärkste Proxy oben steht.
+- **Admin-UI**: In der Sessions-Tabelle neuer Icon-Button (Public-Icon)
+  pro Zeile öffnet einen Dialog mit Profile/Host/Port/Sent/Recv/Sockets-
+  Spalten. Byte-Werte in `formatBytes` (B/KB/MB/GB).
+
+### Notes
+
+- Keine Backfill-Migration: Sessions vor 0.14.0 haben einfach keine
+  `bot_proxy_stats`-Zeilen, das Dialog zeigt dann "No proxy traffic
+  recorded".
+- Werte sind kumulativ seit Bot-Start. Server kann Deltas per
+  `recorded_at` berechnen falls Zeitreihen gebraucht werden — aktuell
+  nicht implementiert.
+
 ## [0.13.1] — Version-Anzeige in Admin-Panel + Server-Boot-Log
 
 ### Added

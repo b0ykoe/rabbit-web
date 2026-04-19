@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Box, Typography, Chip, IconButton, Tooltip, ToggleButtonGroup, ToggleButton } from '@mui/material';
+import {
+  Box, Typography, Chip, IconButton, Tooltip,
+  ToggleButtonGroup, ToggleButton,
+  Dialog, DialogTitle, DialogContent, DialogActions, Button,
+  Table, TableHead, TableBody, TableRow, TableCell,
+} from '@mui/material';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
+import PublicIcon from '@mui/icons-material/Public';
 import DataTable from '../common/DataTable.jsx';
 import StatusBadge from '../common/StatusBadge.jsx';
 import CopyableText from '../common/CopyableText.jsx';
@@ -10,6 +16,92 @@ import { useApi } from '../../hooks/useApi.js';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { formatDuration } from '../../utils/format.js';
+
+function formatBytes(n) {
+  if (n == null) return '-';
+  const v = Number(n);
+  if (v >= 1024 ** 3) return `${(v / 1024 ** 3).toFixed(2)} GB`;
+  if (v >= 1024 ** 2) return `${(v / 1024 ** 2).toFixed(2)} MB`;
+  if (v >= 1024)      return `${(v / 1024).toFixed(2)} KB`;
+  return `${v} B`;
+}
+
+function ProxyStatsDialog({ sessionId, onClose }) {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    adminApi.getSessionProxyStats(sessionId)
+      .then(r => { if (!cancelled) setRows(r.data || []); })
+      .catch(e => { if (!cancelled) setError(e.data?.error || 'Failed to load'); });
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  return (
+    <Dialog open={!!sessionId} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>SOCKS5 Proxy Traffic</DialogTitle>
+      <DialogContent dividers>
+        {error && <Typography color="error">{error}</Typography>}
+        {!rows && !error && <Typography color="text.secondary">Loading...</Typography>}
+        {rows && rows.length === 0 && (
+          <Typography color="text.disabled">
+            No proxy traffic recorded for this session.
+          </Typography>
+        )}
+        {rows && rows.length > 0 && (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Profile</TableCell>
+                <TableCell>Host</TableCell>
+                <TableCell align="right">Port</TableCell>
+                <TableCell align="right">Sent</TableCell>
+                <TableCell align="right">Received</TableCell>
+                <TableCell align="right">Sockets (active/total)</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((r, i) => (
+                <TableRow key={i}>
+                  <TableCell><Typography variant="body2">{r.profile_name}</Typography></TableCell>
+                  <TableCell>
+                    <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                      {r.host || '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" fontFamily="monospace">
+                      {r.port || '-'}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" fontFamily="monospace">
+                      {formatBytes(r.bytes_sent)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" fontFamily="monospace">
+                      {formatBytes(r.bytes_recv)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell align="right">
+                    <Typography variant="caption" fontFamily="monospace">
+                      {r.sockets_active} / {r.sockets_total}
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -29,6 +121,7 @@ export default function Sessions() {
   // from the response for plain admins, so this is also a display gate).
   const canSeeIp = me?.role === 'super_admin';
   const [killTarget, setKillTarget] = useState(null);
+  const [proxyStatsSession, setProxyStatsSession] = useState(null);
 
   useEffect(() => {
     const interval = setInterval(refetch, 5000);
@@ -169,13 +262,22 @@ export default function Sessions() {
     },
     {
       id: 'actions', label: '', align: 'right',
-      render: (row) => row.active ? (
-        <Tooltip title="Kill session">
-          <IconButton size="small" color="error" onClick={() => setKillTarget(row.session_id)}>
-            <StopCircleIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
-      ) : null,
+      render: (row) => (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
+          <Tooltip title="View SOCKS5 proxy traffic">
+            <IconButton size="small" onClick={() => setProxyStatsSession(row.session_id)}>
+              <PublicIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {row.active && (
+            <Tooltip title="Kill session">
+              <IconButton size="small" color="error" onClick={() => setKillTarget(row.session_id)}>
+                <StopCircleIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Box>
+      ),
     },
   ];
 
@@ -215,6 +317,11 @@ export default function Sessions() {
         onCancel={() => setKillTarget(null)}
         confirmText="Kill"
         color="error"
+      />
+
+      <ProxyStatsDialog
+        sessionId={proxyStatsSession}
+        onClose={() => setProxyStatsSession(null)}
       />
     </Box>
   );

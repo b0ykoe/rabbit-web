@@ -46,8 +46,9 @@ export const adminApi = {
   resetLicenseHwid:  (key)        => apiFetch(`/api/admin/licenses/${key}/reset-hwid`, { method: 'PATCH' }),
 
   // Sessions
-  getSessions:  (page = 1, status = 'active') => apiFetch(`/api/admin/sessions?page=${page}&status=${status}`),
-  killSession:  (id)       => apiFetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getSessions:        (page = 1, status = 'active') => apiFetch(`/api/admin/sessions?page=${page}&status=${status}`),
+  getSessionProxyStats: (id) => apiFetch(`/api/admin/sessions/${encodeURIComponent(id)}/proxy-stats`),
+  killSession:        (id)  => apiFetch(`/api/admin/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // Global Statuses (no delete — archive only)
   getStatuses:    ()          => apiFetch('/api/admin/statuses'),

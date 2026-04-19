@@ -132,6 +132,18 @@ export const botHeartbeatSchema = z.object({
   server_ip:      z.string().max(45).optional(),
   server_port:    z.string().max(8).optional(),
   server_variant: z.string().max(32).optional(),
+  // Per-SOCKS5-proxy traffic breakdown. Cumulative since bot start; server
+  // keeps the latest value per (session_id, profile). Credentials are
+  // never sent by the client — only name/host/port + counters.
+  proxy_stats: z.array(z.object({
+    profile:        z.string().min(1).max(64),
+    host:           z.string().max(253).optional().default(''),
+    port:           z.number().int().min(0).max(65535).optional().default(0),
+    bytes_sent:     z.number().nonnegative().default(0),
+    bytes_recv:     z.number().nonnegative().default(0),
+    sockets_active: z.number().int().nonnegative().default(0),
+    sockets_total:  z.number().int().nonnegative().default(0),
+  })).optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
