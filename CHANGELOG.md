@@ -22,6 +22,11 @@
 - **Admin-UI**: In der Sessions-Tabelle neuer Icon-Button (Public-Icon)
   pro Zeile öffnet einen Dialog mit Profile/Host/Port/Sent/Recv/Sockets-
   Spalten. Byte-Werte in `formatBytes` (B/KB/MB/GB).
+- **Feature-Flag `ip_profiles`** im User-Form (unter User Features)
+  parallel zum `hwid_spoof`-Flag. Default OFF (in `SHOP_MODULES`) —
+  Admin muss es pro User explizit freischalten. Kein Shop-Eintrag in
+  [config/shop.json](server/config/shop.json) bislang; fügt der Admin
+  einen hinzu sobald das Feature monetarisiert werden soll.
 
 ### Notes
 

@@ -23,6 +23,7 @@ const FEATURE_FLAG_GROUPS = [
     { key: 'buffs',       label: 'Buffs' },
     { key: 'consumables', label: 'Consumables' },
     { key: 'hwid_spoof',  label: 'HWID Spoof' },
+    { key: 'ip_profiles', label: 'IP Profiles (SOCKS5)' },
   ]},
   { label: 'Developer', flags: [
     { key: 'dev',            label: 'Dev (Master)' },
@@ -49,6 +50,7 @@ const FEATURE_FLAG_GROUPS = [
 // explicitly grant each one (bot sees `false` until toggled).
 const SHOP_MODULES = new Set([
   'hwid_spoof',
+  'ip_profiles',
   'inventory',
   'buffs',
   'consumables',
