@@ -126,6 +126,12 @@ export const botHeartbeatSchema = z.object({
     stuck_escapes: z.number().int().default(0),
     runtime_ms:    z.number().int().default(0),
   }).optional(),
+  // Game server the bot client is currently connected to. All three
+  // optional — the bot only knows them once the game has an established
+  // TCP socket to the login/channel server.
+  server_ip:      z.string().max(45).optional(),
+  server_port:    z.string().max(8).optional(),
+  server_variant: z.string().max(32).optional(),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

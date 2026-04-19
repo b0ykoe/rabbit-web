@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.12.0] — Game-Server-Spalte in Admin-Sessions
+
+### Added
+
+- Der Bot meldet jetzt bei jedem Heartbeat, zu welchem LC-Server er
+  verbunden ist: `server_ip`, `server_port` und `server_variant`
+  (`Nemesis` / `EP4 Stock`). Die Werte werden in drei neuen Spalten auf
+  `bot_sessions` (Migration
+  [021_game_server_info.js](server/migrations/021_game_server_info.js))
+  persistiert und in der Admin-Sessions-Tabelle als neue Spalte
+  **Game Server** angezeigt (IP:Port + Variant-Chip).
+- Die Game-Server-Felder sind — anders als die Admin-Client-IP — für
+  alle Admins sichtbar, nicht nur Super-Admins: eine Server-Endpoint-
+  Adresse ist keine personenbezogene Information.
+- [botHeartbeatSchema](server/src/validation/schemas.js) akzeptiert die
+  neuen optionalen Felder; der Heartbeat-Handler überschreibt nur, wenn
+  der Bot tatsächlich Werte mitschickt (bevor der Game-Client einen
+  Socket hat, fehlen die Felder — wir behalten den letzten Stand).
+
+## [0.11.2] — User-Edit Boolean-Fix + ruhiger Sessions-Auto-Refresh
+
+### Fixed
+
+- Beim Bearbeiten eines Users warf die API `Expected boolean, received
+  number` für `hwid_reset_enabled`, wenn der Switch nicht einmal
+  getoggelt wurde. Ursache: SQLite speichert Booleans als 0/1, und der
+  GET-Handler in [admin.users.js](server/src/routes/admin.users.js) gab
+  den Rohwert weiter. Der Zod-`updateUserSchema` erwartet aber echtes
+  Boolean. GET-Response castet `hwid_reset_enabled` (und
+  `force_password_change`) jetzt via `!!` — das API-Contract ist damit
+  konsistent Boolean, alle Clients bekommen den richtigen Typ.
+- Listen (z. B. Bot-Sessions) "zitterten" beim 5s-Auto-Refresh, weil
+  `useApi` bei jedem Refetch `loading=true` setzte — `DataTable`
+  unmountete daraufhin den Tabellen-Body und zeigte kurz den Spinner.
+  [useApi.js](client/src/hooks/useApi.js) setzt `loading` jetzt nur
+  noch beim initialen Mount auf `true` (via `useState(true)`); alle
+  folgenden Fetches aktualisieren `data` in-place ohne UI-Flackern.
+  Bonus: Page-Wechsel in paginierten Tabellen fühlen sich jetzt auch
+  flüssiger an (stale-while-revalidate-Verhalten).
+
+## [0.11.1] — Real-client-IP behind Cloudflare
+
+### Fixed
+
+- Audit-Logs, `bot_sessions.ip_address`, Rate-Limiter-Keys und alle
+  UI-Sichtbarkeit von "wer hat sich von wo angemeldet" haben die
+  Cloudflare-Edge-IPs (`104.21.*`, `172.67.*`, `188.114.*`)
+  angezeigt statt der echten Client-IPs. Ursache: in der
+  CF → Nginx → Node-Kette wurde der `X-Forwarded-For` nicht
+  zuverlässig bis zu Express durchgereicht.
+- Neue Middleware in [index.js](server/src/index.js) liest
+  `CF-Connecting-IP` (setzt Cloudflare garantiert auf jeden
+  Request) und überschreibt damit `req.ip`, bevor irgendeine
+  andere Middleware darauf zugreift. Ab jetzt siehst du wieder
+  echte User-IPs in Audit, Sessions, Rate-Limits.
+- `app.set('trust proxy', 1)` bleibt zusätzlich gesetzt, damit
+  `req.secure` / `req.protocol` korrekt sind (für die Session-
+  `Secure`-Cookie-Logik wenn wir die später wieder aktivieren).
+
 ## [0.11.0] — Protocol hardening (Stage 1+2+3) + super_admin routing fix
 
 ### Added — Protocol hardening

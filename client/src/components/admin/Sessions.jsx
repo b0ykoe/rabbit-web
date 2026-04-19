@@ -69,6 +69,36 @@ export default function Sessions() {
         ? <Tooltip title={row.user_email}><Typography variant="body2">{row.user_name}</Typography></Tooltip>
         : <Typography variant="caption" color="text.disabled">unassigned</Typography>,
     },
+    // Game-server column — which LC server the bot client is connected to.
+    // Visible to every admin (a game-server endpoint is a public address,
+    // unlike the client IP below which is super-admin-only).
+    {
+      id: 'game_server', label: 'Game Server',
+      render: (row) => {
+        const ip      = row.game_server_ip;
+        const port    = row.game_server_port;
+        const variant = row.game_server_variant;
+        if (!ip && !variant) return <Typography variant="caption" color="text.disabled">—</Typography>;
+        return (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+            {ip && (
+              <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                {port ? `${ip}:${port}` : ip}
+              </Typography>
+            )}
+            {variant && (
+              <Chip
+                label={variant}
+                size="small"
+                variant="outlined"
+                color={variant === 'Nemesis' ? 'secondary' : variant === 'EP4 Stock' ? 'primary' : 'default'}
+                sx={{ alignSelf: 'flex-start', height: 18, fontSize: '0.7rem' }}
+              />
+            )}
+          </Box>
+        );
+      },
+    },
     // IP column — super-admin only. The server side also redacts these
     // fields for non-super-admin viewers (belt-and-braces).
     ...(canSeeIp ? [{

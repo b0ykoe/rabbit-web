@@ -11,7 +11,6 @@ export function useApi(fetchFn, deps = []) {
   const [error, setError]     = useState(null);
 
   const fetch = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const result = await fetchFn();

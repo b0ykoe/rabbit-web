@@ -38,6 +38,8 @@ router.get('/', async (req, res) => {
     for (const u of users) {
       u.allowed_channels = u.allowed_channels ? JSON.parse(u.allowed_channels) : ['release'];
       u.feature_flags = u.feature_flags ? JSON.parse(u.feature_flags) : {};
+      u.hwid_reset_enabled = !!u.hwid_reset_enabled;
+      u.force_password_change = !!u.force_password_change;
     }
     const ids = users.map(u => u.id);
     const counts = await db('licenses')

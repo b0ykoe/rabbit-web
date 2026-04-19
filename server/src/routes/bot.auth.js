@@ -263,7 +263,7 @@ router.post('/heartbeat',
   validateBotToken,
   botHeartbeatSessionLimiter,
   async (req, res) => {
-  const { session_id, stats } = req.validated;
+  const { session_id, stats, server_ip, server_port, server_variant } = req.validated;
   const tp = req.botToken;
 
   if (tp.session_id !== session_id) {
@@ -286,6 +286,13 @@ router.post('/heartbeat',
   if (stats) {
     updateData.stats_json = JSON.stringify(stats);
   }
+  // Game-server fields: only overwrite when the bot actually reported a
+  // value. Between loading screens / before the game client opens its
+  // socket, the bot sends nothing — we keep the last known value rather
+  // than clobbering it with null.
+  if (server_ip)      updateData.game_server_ip      = server_ip;
+  if (server_port)    updateData.game_server_port    = server_port;
+  if (server_variant) updateData.game_server_variant = server_variant;
   await db('bot_sessions').where('session_id', session_id).update(updateData);
 
   // IP drift detector — any time the heartbeat comes from a different IP

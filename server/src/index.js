@@ -42,6 +42,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set('trust proxy', 1);   // Cloudflare → CloudPanel/Nginx → Node
 
+// Prefer Cloudflare's real-client-IP header. CF sets `CF-Connecting-IP`
+// on every request; `X-Forwarded-For` sometimes gets rewritten by
+// intermediate proxies (CloudPanel's Nginx). This override makes
+// audit-logs / rate-limits / bot_sessions.ip_address see the end-user
+// IP instead of a Cloudflare edge IP (104.21.*, 172.67.*, 188.114.*).
+app.use((req, _res, next) => {
+  const cf = req.headers['cf-connecting-ip'];
+  if (cf) {
+    Object.defineProperty(req, 'ip', { get: () => cf, configurable: true });
+  }
+  next();
+});
+
 // ── Global Middleware ───────────────────────────────────────────────────────
 
 app.use(helmet({ contentSecurityPolicy: false })); // CSP breaks CDN scripts

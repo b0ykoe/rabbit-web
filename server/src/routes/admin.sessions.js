@@ -44,6 +44,11 @@ router.get('/', async (req, res) => {
     'bot_sessions.ended_at',
     'bot_sessions.end_reason',
     'bot_sessions.stats_json',
+    // Game-server fields (not super-admin-gated — a game-server endpoint
+    // is a public address, unlike the admin-client ip_address below).
+    'bot_sessions.game_server_ip',
+    'bot_sessions.game_server_port',
+    'bot_sessions.game_server_variant',
     'users.name as user_name',
     'users.email as user_email',
   ];
