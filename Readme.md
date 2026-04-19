@@ -23,6 +23,3 @@ npm run keygen
 # Start dev (runs both server + client)
 npm run dev
 
-admin@portal.local
-Admin1234!
-Abc123456789!

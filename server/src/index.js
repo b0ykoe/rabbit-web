@@ -40,6 +40,7 @@ import adminSettingsRoutes  from './routes/admin.settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+app.set('trust proxy', 1);   // Cloudflare → CloudPanel/Nginx → Node
 
 // ── Global Middleware ───────────────────────────────────────────────────────
 

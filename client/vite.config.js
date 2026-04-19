@@ -7,7 +7,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'https://api.rabbitlc.xyz',
+        target: 'https://localhost:3000',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('error', (err) => {
