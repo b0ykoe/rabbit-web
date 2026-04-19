@@ -20,20 +20,12 @@
  * @param {import('knex').Knex} knex
  */
 export async function up(knex) {
-  // MySQL: check information_schema for the legacy index
-  const [legacyRows] = await knex.raw(
-    `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME   = 'bot_configs'
-        AND INDEX_NAME   = 'bot_configs_user_id_char_name_unique'`
-  );
-  const legacyCount = Number(legacyRows?.[0]?.c ?? 0);
-  if (legacyCount > 0) {
-    await knex.raw('ALTER TABLE `bot_configs` DROP INDEX `bot_configs_user_id_char_name_unique`');
-  }
+  // Order matters: MySQL refuses to drop the legacy index while it's
+  // the only one covering the user_id FK. Create the new composite
+  // (which also has user_id as its leading column and therefore can
+  // back the FK) FIRST, then drop the legacy.
 
-  // Make sure the correct composite unique is in place. On DBs where 013
-  // fully ran this is a no-op; on the broken DB we add it now.
+  // Step 1: ensure the correct composite unique exists.
   const [newRows] = await knex.raw(
     `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
       WHERE TABLE_SCHEMA = DATABASE()
@@ -45,6 +37,43 @@ export async function up(knex) {
     await knex.raw(
       'ALTER TABLE `bot_configs` ADD UNIQUE `bot_configs_user_config_unique` (`user_id`, `config_type`, `char_name`)'
     );
+  }
+
+  // Step 2: drop the legacy index. If MySQL still complains about the FK
+  // (shouldn't happen now that the composite is there), fall back to the
+  // full rotate: drop FK → drop index → recreate FK.
+  const [legacyRows] = await knex.raw(
+    `SELECT COUNT(*) AS c FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME   = 'bot_configs'
+        AND INDEX_NAME   = 'bot_configs_user_id_char_name_unique'`
+  );
+  if (Number(legacyRows?.[0]?.c ?? 0) > 0) {
+    try {
+      await knex.raw('ALTER TABLE `bot_configs` DROP INDEX `bot_configs_user_id_char_name_unique`');
+    } catch (err) {
+      if (err?.code !== 'ER_DROP_INDEX_FK') throw err;
+
+      // Resolve the FK name dynamically (Knex default is
+      // `bot_configs_user_id_foreign`, but older DBs may have a
+      // generated name like `bot_configs_ibfk_1`).
+      const [fkRows] = await knex.raw(
+        `SELECT CONSTRAINT_NAME AS name FROM information_schema.KEY_COLUMN_USAGE
+          WHERE TABLE_SCHEMA      = DATABASE()
+            AND TABLE_NAME        = 'bot_configs'
+            AND COLUMN_NAME       = 'user_id'
+            AND REFERENCED_TABLE_NAME = 'users'`
+      );
+      const fkName = fkRows?.[0]?.name;
+      if (!fkName) throw err;
+
+      await knex.raw(`ALTER TABLE \`bot_configs\` DROP FOREIGN KEY \`${fkName}\``);
+      await knex.raw('ALTER TABLE `bot_configs` DROP INDEX `bot_configs_user_id_char_name_unique`');
+      await knex.raw(
+        `ALTER TABLE \`bot_configs\` ADD CONSTRAINT \`${fkName}\`
+           FOREIGN KEY (\`user_id\`) REFERENCES \`users\`(\`id\`) ON DELETE CASCADE`
+      );
+    }
   }
 }
 
