@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.12.1] — Repair-Migration für bot_configs unique-Index
+
+### Fixed
+
+- HWID- und Character-Scoped Config-Saves liefen auf Prod in
+  `ER_DUP_ENTRY 'Duplicate entry "2-" for key
+  bot_configs_user_id_char_name_unique'` → der Bot zeigte kein
+  "Config saved"-Chip, nach Neustart waren alle Nicht-Global-
+  Settings weg. Ursache: der alte Unique-Index auf `(user_id,
+  char_name)` (aus Migration 012) wurde in Migration 013 nicht
+  gedroppt, weil der DROP im `if (!hasConfigType)`-Zweig hing und
+  `config_type` auf dieser DB bereits existierte. Beide Indices
+  lebten parallel; der Legacy-Index kollidiert zwischen dem
+  bestehenden Global-Row (`char_name=''`) und neuen HWID/
+  Character-Inserts mit demselben leeren `char_name`.
+- Migration
+  [022_drop_legacy_bot_configs_unique.js](server/migrations/022_drop_legacy_bot_configs_unique.js)
+  droppt den Legacy-Index falls er noch da ist und legt das
+  korrekte Composite `(user_id, config_type, char_name)` an, falls
+  es fehlt. Idempotent — auf sauberen DBs ein No-Op.
+
 ## [0.12.0] — Game-Server-Spalte in Admin-Sessions
 
 ### Added
