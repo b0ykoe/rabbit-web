@@ -89,87 +89,99 @@ router.post('/', validate(createUserSchema), async (req, res) => {
 });
 
 // PATCH /api/admin/users/:id — update
+//
+// Wrapped in a transaction with `forUpdate()` on the user row so two
+// concurrent admin edits cannot race on feature_flags (or any other
+// merged-state field). Without the lock, both writers read the same
+// baseline, build their updates against it, and the later write
+// silently clobbers the earlier one. shopService.purchaseModule
+// already follows this pattern.
 router.patch('/:id', validate(updateUserSchema), async (req, res) => {
   const { id } = req.params;
-  const user = await db('users').where('id', id).first();
-  if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const updates = {};
-  const oldValues = {};
-  const newValues = {};
+  const result = await db.transaction(async (trx) => {
+    const user = await trx('users').where('id', id).forUpdate().first();
+    if (!user) return { status: 404, body: { error: 'User not found' } };
 
-  // Role changes gated by super-admin. Also prevent a super-admin from
-  // demoting themselves via this endpoint (would lock out their own
-  // access); a super-admin must be demoted by another super-admin.
-  if (req.validated.role !== undefined && req.validated.role !== user.role) {
-    const denied = checkRoleAssignmentAllowed(req, req.validated.role);
-    if (denied) return res.status(denied.status).json(denied.body);
-    if (Number(id) === req.session.user.id && user.role === 'super_admin') {
-      return res.status(422).json({ error: 'Cannot demote your own super_admin role' });
+    const updates = {};
+    const oldValues = {};
+    const newValues = {};
+
+    // Role changes gated by super-admin. Also prevent a super-admin from
+    // demoting themselves via this endpoint (would lock out their own
+    // access); a super-admin must be demoted by another super-admin.
+    if (req.validated.role !== undefined && req.validated.role !== user.role) {
+      const denied = checkRoleAssignmentAllowed(req, req.validated.role);
+      if (denied) return { status: denied.status, body: denied.body };
+      if (Number(id) === req.session.user.id && user.role === 'super_admin') {
+        return { status: 422, body: { error: 'Cannot demote your own super_admin role' } };
+      }
     }
-  }
 
-  for (const field of ['name', 'email', 'role', 'status']) {
-    if (req.validated[field] !== undefined && req.validated[field] !== user[field]) {
-      oldValues[field] = user[field];
-      newValues[field] = req.validated[field];
-      updates[field]   = req.validated[field];
+    for (const field of ['name', 'email', 'role', 'status']) {
+      if (req.validated[field] !== undefined && req.validated[field] !== user[field]) {
+        oldValues[field] = user[field];
+        newValues[field] = req.validated[field];
+        updates[field]   = req.validated[field];
+      }
     }
-  }
 
-  if (req.validated.allowed_channels !== undefined) {
-    const currentChannels = user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'];
-    const newChannels = req.validated.allowed_channels;
-    if (JSON.stringify(currentChannels) !== JSON.stringify(newChannels)) {
-      oldValues.allowed_channels = currentChannels;
-      newValues.allowed_channels = newChannels;
-      updates.allowed_channels = JSON.stringify(newChannels);
+    if (req.validated.allowed_channels !== undefined) {
+      const currentChannels = user.allowed_channels ? JSON.parse(user.allowed_channels) : ['release'];
+      const newChannels = req.validated.allowed_channels;
+      if (JSON.stringify(currentChannels) !== JSON.stringify(newChannels)) {
+        oldValues.allowed_channels = currentChannels;
+        newValues.allowed_channels = newChannels;
+        updates.allowed_channels = JSON.stringify(newChannels);
+      }
     }
-  }
 
-  if (req.validated.email && req.validated.email !== user.email) {
-    const exists = await db('users').where('email', req.validated.email).whereNot('id', id).first();
-    if (exists) return res.status(422).json({ errors: { email: ['Email already in use'] } });
-  }
-
-  if (req.validated.hwid_reset_enabled !== undefined && req.validated.hwid_reset_enabled !== !!user.hwid_reset_enabled) {
-    oldValues.hwid_reset_enabled = !!user.hwid_reset_enabled;
-    newValues.hwid_reset_enabled = req.validated.hwid_reset_enabled;
-    updates.hwid_reset_enabled = req.validated.hwid_reset_enabled;
-  }
-
-  if (req.validated.feature_flags !== undefined) {
-    const currentFlags = user.feature_flags ? JSON.parse(user.feature_flags) : {};
-    const newFlags = req.validated.feature_flags;
-    if (JSON.stringify(currentFlags) !== JSON.stringify(newFlags)) {
-      oldValues.feature_flags = currentFlags;
-      newValues.feature_flags = newFlags;
-      updates.feature_flags = JSON.stringify(newFlags);
+    if (req.validated.email && req.validated.email !== user.email) {
+      const exists = await trx('users').where('email', req.validated.email).whereNot('id', id).first();
+      if (exists) return { status: 422, body: { errors: { email: ['Email already in use'] } } };
     }
-  }
 
-  if (req.validated.password) {
-    updates.password = await bcrypt.hash(req.validated.password, 12);
-    newValues.password = '(changed)';
-  }
+    if (req.validated.hwid_reset_enabled !== undefined && req.validated.hwid_reset_enabled !== !!user.hwid_reset_enabled) {
+      oldValues.hwid_reset_enabled = !!user.hwid_reset_enabled;
+      newValues.hwid_reset_enabled = req.validated.hwid_reset_enabled;
+      updates.hwid_reset_enabled = req.validated.hwid_reset_enabled;
+    }
 
-  if (Object.keys(updates).length === 0) {
-    return res.json({ message: 'No changes' });
-  }
+    if (req.validated.feature_flags !== undefined) {
+      const currentFlags = user.feature_flags ? JSON.parse(user.feature_flags) : {};
+      const newFlags = req.validated.feature_flags;
+      if (JSON.stringify(currentFlags) !== JSON.stringify(newFlags)) {
+        oldValues.feature_flags = currentFlags;
+        newValues.feature_flags = newFlags;
+        updates.feature_flags = JSON.stringify(newFlags);
+      }
+    }
 
-  await db('users').where('id', id).update(updates);
+    if (req.validated.password) {
+      updates.password = await bcrypt.hash(req.validated.password, 12);
+      newValues.password = '(changed)';
+    }
 
-  // W-2: if role changed or password was force-reset here, any outstanding
-  // tokens the user holds should stop working immediately.
-  if (updates.role !== undefined || updates.password !== undefined) {
-    await db('users').where('id', id).increment('token_version', 1);
-  }
+    if (Object.keys(updates).length === 0) {
+      return { status: 200, body: { message: 'No changes' } };
+    }
 
-  await recordAudit(db, req, {
-    action: 'user.update', subjectType: 'user', subjectId: id, oldValues, newValues,
+    await trx('users').where('id', id).update(updates);
+
+    // W-2: if role changed or password was force-reset here, any outstanding
+    // tokens the user holds should stop working immediately.
+    if (updates.role !== undefined || updates.password !== undefined) {
+      await trx('users').where('id', id).increment('token_version', 1);
+    }
+
+    await recordAudit(trx, req, {
+      action: 'user.update', subjectType: 'user', subjectId: id, oldValues, newValues,
+    });
+
+    return { status: 200, body: { message: 'User updated' } };
   });
 
-  res.json({ message: 'User updated' });
+  res.status(result.status).json(result.body);
 });
 
 // PATCH /api/admin/users/:id/credits — adjust credits

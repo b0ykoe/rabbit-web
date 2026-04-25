@@ -43,6 +43,8 @@ const FEATURE_FLAG_GROUPS = [
     { key: 'dev_buffs',      label: 'Buffs (Dev)' },
     { key: 'dev_anticheat',  label: 'AntiCheat' },
     { key: 'dev_packets',    label: 'Packets' },
+    { key: 'dev_training',   label: 'Training (Dev)' },
+    { key: 'dev_animator',   label: 'Animator' },
   ]},
 ];
 

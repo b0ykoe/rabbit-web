@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.15.0] — Feature-Flag-Parität mit Bot DLL + Race-Fix
+
+### Added
+
+- **Zwei fehlende Dev-Flags im Admin-User-Form**: `dev_training`
+  und `dev_animator` — beide existieren seit Längerem in
+  [Bot/inject/feature_flags.h](../Bot/inject/feature_flags.h) (Zeile
+  41-42), waren aber im Portal-UI nicht togglebar. Admins konnten die
+  Bot-Features deshalb nicht freischalten ohne direkt in der DB zu
+  editieren. Eingefügt im `Developer`-Block in
+  [UserFormDialog.jsx](client/src/components/admin/UserFormDialog.jsx)
+  — keine Backend-Änderung nötig, da das Zod-Schema
+  `z.record(z.boolean())` beliebige Keys durchlässt.
+
+### Fixed
+
+- **Race condition beim parallelen User-Edit**:
+  `PATCH /api/admin/users/:id` hat den User gelesen, Diff gebaut und
+  geschrieben — alles ohne Transaction oder Row-Lock. Zwei Admins,
+  die gleichzeitig dasselbe User-Form speichern, konnten sich
+  gegenseitig Feature-Flag-Änderungen überschreiben (Last-Writer-Wins
+  ohne Merge). Komplette Logik liegt jetzt in
+  `db.transaction(async (trx) => …)` mit `trx('users').forUpdate()`
+  als erstem Read — gleiches Muster, das `shopService.purchaseModule`
+  schon hatte. [admin.users.js](server/src/routes/admin.users.js).
+- **Migration 013-Leftover: `hwid_spoof: true` für Alt-User**:
+  Migration 013 hatte beim initialen Seeding der `feature_flags`-
+  JSON-Spalte `hwid_spoof: true` für ALLE bestehenden User gesetzt
+  — die Module ist aber ein 300-Credit-Shop-Item. Jeder User, der
+  vor 0.10.0 existierte, hatte HWID Spoof effektiv gratis.
+  Migration
+  [024_normalize_feature_flags.js](server/migrations/024_normalize_feature_flags.js)
+  flippt `hwid_spoof` auf `false` für alle User OHNE
+  `shop.purchase_module`-Audit-Eintrag mit `flag_key=hwid_spoof`.
+  Käufer behalten ihren Zugang. Die Migration füllt außerdem
+  fehlende Flag-Keys (alles was nach 013 dazukam: `inventory`,
+  `buffs`, `consumables`, `ip_profiles` und alle neuen `dev_*`-
+  Flags) mit den kanonischen Defaults aus der `FeatureFlags`-
+  Struct, damit die User-Edit-Form nicht mehr halbleere Objekte
+  rendern muss.
+
+### Notes
+
+- `npm run migrate` nach dem Pull. Migration 024 ist idempotent —
+  ein zweites Run ändert nichts.
+- `options` und `security` tauchen im Admin-User-Form bewusst nicht
+  auf: `ParseFeatureFlags`
+  ([feature_flags.cpp:20,26](../Bot/inject/feature_flags.cpp:20))
+  setzt `options=true` hardcoded und defaultet `security=true`,
+  wenn der Key in der Server-Antwort fehlt. Das wird vom Migrations-
+  Merge bewusst nicht überschrieben — die Keys bleiben weg, der
+  Bot verwendet seine eigenen Defaults.
+
 ## [0.14.0] — Per-Proxy-Traffic-Stats in Session-View
 
 ### Added
