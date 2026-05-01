@@ -22,6 +22,8 @@ import authRoutes           from './routes/auth.js';
 import botAuthRoutes        from './routes/bot.auth.js';
 import botDownloadRoutes    from './routes/bot.download.js';
 import botConfigRoutes      from './routes/bot.config.js';
+import botConfigRecordsRoutes from './routes/bot.config.records.js';
+import portalShareRoutes    from './routes/portal.share.js';
 import adminDashboardRoutes from './routes/admin.dashboard.js';
 import adminUsersRoutes     from './routes/admin.users.js';
 import adminLicensesRoutes  from './routes/admin.licenses.js';
@@ -107,6 +109,11 @@ app.get('/api/version', (_req, res) => {
 // ── Bot API Routes (stateless, no session/CSRF) ─────────────────────────────
 
 app.use('/api/bot/auth',     botAuthRoutes);
+// New fact-based config endpoints (record/list/active/characters) are
+// mounted first so they shadow nothing in the legacy router. Legacy paths
+// (/global, /character, /hwid, /ip-profiles) live in botConfigRoutes and
+// are now backed by the same tables via a shim.
+app.use('/api/bot/config',   botConfigRecordsRoutes);
 app.use('/api/bot/config',   botConfigRoutes);
 app.use('/api/bot',          botDownloadRoutes);
 
@@ -149,6 +156,14 @@ app.use('/api/portal/shop',      portalShopRoutes);
 app.use('/api/portal/download',  portalDownloadRoutes);
 app.use('/api/portal/reset-hwid', portalResetHwidRoutes);
 app.use('/api/portal/sessions',  portalSessionsRoutes);
+
+// ── Public share landing page (no auth) ──────────────────────────────────────
+// Server-rendered HTML at /share/:id. Mounted before the SPA fallback so
+// browser visits land on this page instead of the React app's 404. The bot
+// API endpoint /api/bot/config/share/:id stays authenticated; this public
+// page only exposes metadata (source name, kind, tabs, key count) — never
+// the actual config values.
+app.use('/', portalShareRoutes);
 
 // ── Static Files (React build — production only) ─────────────────────────────
 // In dev, Vite serves the frontend on :5173 and proxies /api to Express.
