@@ -42,15 +42,16 @@ const router = Router();
 // Where the image files live on disk. Sibling of the Releases dll/loader dirs
 // under the same private root so the same BOT_PRIVATE_DIR env governs both.
 const ZONE_MAP_DIR = path.join(config.bot.privateDir, 'zone_maps');
-// 32 MB cap for a single background image. Zone maps are large: a 4096 PNG or a
-// hybrid SVG that embeds a 2048 terrain raster easily blows past the old 8 MB cap
-// (which surfaced as MulterError: File too large on real uploads).
-const ZONE_MAP_MAX_BYTES = 32 * 1024 * 1024;
+// 150 MB cap for a single background image. Zone maps are large: a 4096 PNG can
+// be 60-70 MB (zone_0_4096.png is ~65 MB), and a hybrid SVG that embeds a 2048
+// terrain raster adds more. NOTE: nginx client_max_body_size MUST be >= this or
+// the proxy 413s before the body ever reaches multer.
+const ZONE_MAP_MAX_BYTES = 150 * 1024 * 1024;
 const ZONE_MAP_MAX_MB    = Math.round(ZONE_MAP_MAX_BYTES / (1024 * 1024));
 
 // DISK multer into the shared _tmp staging dir (identical to Releases). No
 // fileFilter here — we enforce type by MIME *and* magic bytes in the route so a
-// spoofed Content-Type can't smuggle a non-image through. Size capped at 32 MB.
+// spoofed Content-Type can't smuggle a non-image through. Size capped at 150 MB.
 const zoneMapUpload = multer({
   dest: path.join(config.bot.privateDir, '_tmp'),
   limits: { fileSize: ZONE_MAP_MAX_BYTES },
@@ -534,7 +535,7 @@ router.get('/servers/:id/zone-maps', requireSuperAdmin, async (req, res) => {
 
 // POST /api/admin/world/servers/:id/zones/:zoneNo/map — upload ONE background
 // image (field 'file'). Accepts svg or png only, validated by MIME + magic
-// bytes, ≤32 MB. Stored under <privateDir>/zone_maps/ with a deterministic,
+// bytes, ≤150 MB. Stored under <privateDir>/zone_maps/ with a deterministic,
 // path-free name. UPSERTs the zone_maps row (removes any prior file first).
 router.post('/servers/:id/zones/:zoneNo/map', requireSuperAdmin, zoneMapUploadSingle, async (req, res) => {
   const serverId = parseInt(req.params.id, 10);
