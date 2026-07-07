@@ -9,6 +9,7 @@ import { adminApi } from '../../../api/endpoints.js';
 import ServerTabs, { SERVER_TABS } from './ServerTabs.jsx';
 import ServerSettingsTab from './ServerSettingsTab.jsx';
 import ServerOverviewTab from './ServerOverviewTab.jsx';
+import UploadsTab from './UploadsTab.jsx';
 import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
@@ -79,7 +80,12 @@ export default function WorldServerDetailPage() {
       case 'map':
         return <StubPanel {...tabProps} label="Embedded map preview lands in P4." />;
       case 'uploads':
-        return <StubPanel {...tabProps} label="Unified uploads land in P3." />;
+        return (
+          <UploadsTab
+            {...tabProps}
+            onOpenTab={(t) => navigate(`/admin/world/servers/${id}/${t}`)}
+          />
+        );
       case 'data':
         return <StubPanel {...tabProps} label="Reference tables (monsters / NPCs / zones) land in a later phase." />;
       case 'overview':
