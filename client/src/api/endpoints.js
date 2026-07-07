@@ -216,6 +216,35 @@ export const worldApi = {
   // Zone framing bounds (additive portal GET; 404 when absent).
   zoneBounds: (sid, zone) => cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/bounds`),
 
+  // ── Bulk browse-load (Phase B — retire the per-mob request fan-out) ─────────
+  // ALL mobs' cells for ONE zone in a single query → { cells:[{ mob_id, cell_x,
+  // cell_z, x, z, y, hits, passes, instance_sum, density_score, reliability,
+  // typical_group, last_seen_sec }...], truncated, version }. Toggling mobs on/off
+  // then filters this cached payload CLIENT-SIDE — zero further requests.
+  // opts: { version } (version = 'latest'|'all'|<id>).
+  spawnsAll: (sid, zone, opts = {}) => {
+    const params = {};
+    if (opts.version !== undefined && opts.version !== null && opts.version !== '') params.version = opts.version;
+    const qs = Object.keys(params).length ? `?${new URLSearchParams(params).toString()}` : '';
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/spawns-all${qs}`);
+  },
+
+  // Whole-server browse index in one call → { mobs:[{ mob_id, name, zones:[<zone_no>
+  // ...] }], zoneNames:{ "<zone_no>":"<name>" } }. Replaces the per-keystroke mob
+  // catalog search AND the per-mob zone derivation: the checklist/search filter the
+  // mobs[] client-side; the zone options come from the selected mobs' zones[].
+  zoneIndex: (sid) => cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zone-index`),
+
+  // User-safe version/date list for the fine picker → [{ version_id, ver_start_sec,
+  // ver_end_sec, run_count, is_current }] newest-first. opts: { zone_no } narrows to
+  // one zone. NO recorder/user/session fields (that is the admin /sessions route).
+  versions: (sid, opts = {}) => {
+    const params = {};
+    if (opts.zone_no !== undefined && opts.zone_no !== null && opts.zone_no !== '') params.zone_no = opts.zone_no;
+    const qs = Object.keys(params).length ? `?${new URLSearchParams(params).toString()}` : '';
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/versions${qs}`);
+  },
+
   // Per-server reference name lists (bot-exported) → { zones:{ "<zone_no>":"<name>" },
   // mobs:{ "<mob_id>":"<name>" } }. Used to label zone/mob pickers with real names.
   names: (sid) => cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/names`),

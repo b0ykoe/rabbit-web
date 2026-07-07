@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Box, Typography, Paper, Grid, MenuItem, TextField, ToggleButtonGroup,
-  ToggleButton, CircularProgress, Alert, Chip, List, ListItem, ListItemButton,
+  Box, Typography, Paper, Grid, MenuItem, ListSubheader, TextField,
+  CircularProgress, Alert, Chip, List, ListItem, ListItemButton,
   ListItemText, Checkbox, Divider, InputAdornment, FormControlLabel, Switch,
   IconButton, Tooltip, Stack, Collapse, Button, useMediaQuery, useTheme,
 } from '@mui/material';
@@ -15,17 +15,24 @@ import { worldApi } from '../../api/endpoints.js';
 // ─────────────────────────────────────────────────────────────────────────────
 // Monster Map — user-facing read view over /api/portal/world.
 //
-// Flow: pick a (visible) SERVER → pick a MOB (catalog search) → we derive the
-// ZONES that mob appears in via /mobs/:id/spawns, pick a zone, then render the
-// zone's CLUSTERS (8-neighbour packs) as an SVG heat map. A cell is 4 m; world =
-// origin + cell*4, framed by /zones/:z/bounds when present (else auto-fit).
-// Controls: version (latest / all-time) and a mob checklist filter.
+// Flow (Phase B — bulk-load + local-cache): pick a (visible) SERVER → we load the
+// whole browse index ONCE (/zone-index: every mob + the zones it appears in + zone
+// names) and cache it. The mob CHECKLIST and SEARCH filter that cached list purely
+// client-side (no per-keystroke requests). The ZONE options come from the selected
+// mobs' zones[] in the index (or an explicit zoneList prop for the admin embed).
+// On (zone, version) we load ALL mobs' cells for the zone ONCE (/spawns-all) and
+// cache it in a Map keyed by `${sid}|${zone}|${version}`; toggling mobs on/off does
+// ZERO new requests — visible cells = cached cells filtered to the selected mobs.
+// Each cell renders as one heat node. A cell is 4 m; world = origin + cell*4,
+// framed by /zones/:z/bounds when present (else auto-fit). The version control is a
+// FINE picker: Latest, All-time, individual versions/dates (/versions), and an
+// as-of date that resolves client-side to the newest version_id ≤ the chosen date.
 //
 // The view body lives in MonsterMapView, an exported inner component with opt-in
 // props so an admin embed can drive it (controlled server, an explicit zone list,
 // a bare-zone background preview, cache-bust nonce, initial zone). Every prop
 // defaults to EXACTLY the user-facing behaviour, and the default export is a thin
-// shell that renders MonsterMapView with no props — byte-for-byte identical.
+// shell that renders MonsterMapView with no props.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CELL_M = 4;          // metres per cell (fixed by ingest quantisation)
@@ -64,6 +71,15 @@ function timeAgo(sec) {
   if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+// Compact YYYY-MM-DD HH:mm label for a unix-seconds timestamp (version dates).
+function fmtDate(sec) {
+  if (!sec) return '—';
+  const d = new Date(sec * 1000);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 // The extracted view body. All props default to the current user-facing behaviour.
@@ -105,40 +121,67 @@ export function MonsterMapView({
   // The effective server id: the controlled prop when provided, else internal state.
   const serverId = controlledServer ? String(serverIdProp) : serverIdState;
 
-  // Reference name lists (bot-exported) for the selected server, keyed by string
-  // id → real name. Prefer these over the mob_catalog / "Zone N" fallbacks.
-  const [zoneNames, setZoneNames] = useState({}); // { "<zone_no>": "<name>" }
-  const [mobNames, setMobNames]   = useState({}); // { "<mob_id>":  "<name>" }
+  // Whole-server browse index (loaded ONCE per server): the mob catalog with the
+  // zones each appears in, plus zone display names. The checklist + search filter
+  // idxMobs client-side; the zone options come from the selected mobs' zones[].
+  const [idxMobs, setIdxMobs]   = useState([]);   // [{ mob_id, name, zones:[<zone_no>...] }]
+  const [zoneNames, setZoneNames] = useState({}); // { "<zone_no>": "<name>" } (from index)
+  const [loadingIndex, setLoadingIndex] = useState(false);
+  // Fast mob_id → real name lookup derived from the index (labels + chips).
+  const mobNames = useMemo(() => {
+    const m = {};
+    for (const mm of idxMobs) if (mm?.mob_id != null && mm.name) m[mm.mob_id] = mm.name;
+    return m;
+  }, [idxMobs]);
 
   const [mobQuery, setMobQuery] = useState('');
-  const [mobs, setMobs]         = useState([]);
-  const [loadingMobs, setLoadingMobs] = useState(false);
   const [selectedMobs, setSelectedMobs] = useState(new Set()); // mob_id checklist
-  const [focusMob, setFocusMob] = useState(null);              // mob used for zone derivation
 
-  const [version, setVersion]   = useState('latest');          // 'latest' | 'all'
+  // FINE version selector. version = the resolved param sent to the API ('latest' |
+  // 'all' | '<version_id>'). asOfDate (when set) drives version = the newest
+  // version_id ≤ that day, resolved client-side against versionList.
+  const [version, setVersion]   = useState('latest');          // resolved API param
+  const [asOfDate, setAsOfDate] = useState('');                // '' | 'YYYY-MM-DD' (as-of picker)
+  const [versionList, setVersionList] = useState([]);          // [{ version_id, ver_start_sec, ver_end_sec, run_count, is_current }]
 
-  const [zonesState, setZonesState] = useState([]);            // [zone_no,...] (mob-derived)
   const [zoneNo, setZoneNo]     = useState('');
-  const [loadingZones, setLoadingZones] = useState(false);
 
-  const [clusters, setClusters] = useState([]);                // rendered packs
+  // Per-(sid|zone|version) bulk cell cache — the ONE fetch per target. Toggling
+  // mobs never refetches; visible cells are filtered out of the cached payload.
+  const cellsCacheRef = useRef(new Map());                     // `${sid}|${zone}|${version}` -> cells[]
+  const [cellsAll, setCellsAll] = useState([]);                // cached cells for the current target
+  const [truncated, setTruncated] = useState(false);           // spawns-all hit the hard cap
   const [bounds, setBounds]     = useState(null);              // zone_bounds row or null
   const [loadingMap, setLoadingMap] = useState(false);
   const [mapError, setMapError] = useState('');
   const [hover, setHover]       = useState(null);              // { c, mobName }
 
   // The zone-picker option list: the explicit prop list (as zone_no ints) when
-  // provided, else the mob-derived zones. Kept as numbers to preserve equality/
-  // membership checks used throughout (parseInt compares, includes, etc.).
+  // provided (admin embed), else the UNION of the selected mobs' zones[] from the
+  // browse index. Kept as sorted numbers to preserve equality/membership checks
+  // used throughout (parseInt compares, includes, etc.).
+  const mobZonesById = useMemo(() => {
+    const m = new Map();
+    for (const mm of idxMobs) {
+      const zs = Array.isArray(mm?.zones) ? mm.zones : [];
+      m.set(mm.mob_id, zs.map((z) => parseInt(z, 10)).filter(Number.isFinite));
+    }
+    return m;
+  }, [idxMobs]);
+
   const zones = useMemo(() => {
     if (zonesProvided) {
       return (zoneList || [])
         .map((z) => parseInt(z?.zone_no, 10))
         .filter(Number.isFinite);
     }
-    return zonesState;
-  }, [zonesProvided, zoneList, zonesState]);
+    // Union over the selected mobs' zone lists (from the cached index).
+    const set = new Set();
+    for (const id of selectedMobs) {
+      for (const z of (mobZonesById.get(id) || [])) set.add(z);
+    }
+    return [...set].sort((a, b) => a - b);
+  }, [zonesProvided, zoneList, selectedMobs, mobZonesById]);
 
   // Zone display names: prefer the bot-exported names map, then the explicit
   // zoneList name (admin embed passes real names), then "Zone N".
@@ -176,10 +219,11 @@ export function MonsterMapView({
   // ── Deep-link from a recording session ("Show on map") ─────────────────────
   // WorldSessions navigates here with react-router state
   //   { serverId, zoneNo, versionId, highlightSpots:[{center_x,center_z,mob_id}] }.
-  // We preselect that server, seed the highlighted mob(s) so the zone derives and
-  // the clusters load, force the zone, and remember the spots to ring on the map.
-  // No state → nothing happens; existing behaviour is untouched. Deep-linking is
-  // only active on the default/user path (deepLinkActive).
+  // We preselect that server, seed the highlighted mob(s) so the zone options
+  // (union of the selected mobs' zones[] in the index) include it, force the zone,
+  // load its cells, and remember the spots to ring on the map. No state → nothing
+  // happens; existing behaviour is untouched. Deep-linking is only active on the
+  // default/user path (deepLinkActive).
   const location = useLocation();
   const navState = deepLinkActive ? (location.state || null) : null;
   const [highlightSpots, setHighlightSpots] = useState([]); // [{center_x,center_z,mob_id}]
@@ -216,10 +260,7 @@ export function MonsterMapView({
     setServerIdState(sid);
     if (navState.zoneNo != null) setPendingZone(String(navState.zoneNo));
     setHighlightSpots(spots);
-    if (mobIds.length) {
-      setSelectedMobs(new Set(mobIds));
-      setFocusMob(mobIds[0]);
-    }
+    if (mobIds.length) setSelectedMobs(new Set(mobIds));
     setNavConsumed(true);
   }, [deepLinkActive, navConsumed, navState, loadingServers]);
 
@@ -232,52 +273,139 @@ export function MonsterMapView({
     }
   }, [pendingZone, zones]);
 
-  // ── Reference name lists for the selected server ───────────────────────────
-  // Additive/optional — a failure just leaves the maps empty and the pickers fall
-  // back to "Zone N" / the mob_catalog name.
+  // ── Whole-server browse index (loaded ONCE per server) ─────────────────────
+  // /zone-index returns the mob catalog (with real names folded in) + the zones
+  // each mob appears in + zone display names — replacing the per-keystroke mob
+  // search, the per-mob zone derivation, AND the /names labels in one call. A
+  // failure leaves the list empty (the checklist shows "No mobs found").
   useEffect(() => {
-    if (!serverId) { setZoneNames({}); setMobNames({}); return; }
+    if (!serverId) { setIdxMobs([]); setZoneNames({}); return; }
     let alive = true;
-    worldApi.names(serverId)
+    setLoadingIndex(true);
+    worldApi.zoneIndex(serverId)
       .then((r) => {
         if (!alive) return;
-        setZoneNames(r?.zones || {});
-        setMobNames(r?.mobs || {});
+        setIdxMobs(Array.isArray(r?.mobs) ? r.mobs : []);
+        setZoneNames(r?.zoneNames || {});
       })
-      .catch(() => { if (alive) { setZoneNames({}); setMobNames({}); } });
+      .catch(() => { if (alive) { setIdxMobs([]); setZoneNames({}); } })
+      .finally(() => { if (alive) setLoadingIndex(false); });
     return () => { alive = false; };
   }, [serverId]);
 
-  // ── Mobs (catalog search, debounced) ──────────────────────────────────────
+  // ── Version list for the fine picker ───────────────────────────────────────
+  // Reloads per (server, zone) so the option list narrows to the zone in view. A
+  // failure leaves only Latest/All-time (the picker degrades gracefully).
   useEffect(() => {
-    if (!serverId) { setMobs([]); return; }
+    if (!serverId) { setVersionList([]); return; }
     let alive = true;
-    setLoadingMobs(true);
-    const t = setTimeout(() => {
-      worldApi.mobs(serverId, mobQuery.trim() || undefined)
-        .then((r) => { if (alive) setMobs(r.data || []); })
-        .catch(() => { if (alive) setMobs([]); })
-        .finally(() => { if (alive) setLoadingMobs(false); });
-    }, 250);
-    return () => { alive = false; clearTimeout(t); };
-  }, [serverId, mobQuery]);
+    worldApi.versions(serverId, zoneNo ? { zone_no: zoneNo } : {})
+      .then((r) => {
+        if (!alive) return;
+        const list = Array.isArray(r) ? r : (r?.data || []);
+        setVersionList(list);
+        // If a specific version_id is selected but the new zone's list no longer
+        // contains it, fall back to Latest so we never query a foreign version.
+        setVersion((cur) => {
+          if (cur === 'latest' || cur === 'all') return cur;
+          return list.some((v) => String(v.version_id) === String(cur)) ? cur : 'latest';
+        });
+      })
+      .catch(() => { if (alive) setVersionList([]); });
+    return () => { alive = false; };
+  }, [serverId, zoneNo]);
+
+  // Newest version whose window STARTED on or before the end of the chosen day —
+  // the client-side "as-of date" resolution. versionList is newest-first, so the
+  // first match wins. Returns a version_id string, or '' when nothing qualifies.
+  const resolveAsOf = useCallback((dateStr) => {
+    if (!dateStr) return '';
+    const endOfDay = Math.floor(new Date(`${dateStr}T23:59:59`).getTime() / 1000);
+    if (!Number.isFinite(endOfDay)) return '';
+    for (const v of versionList) {
+      if ((v.ver_start_sec ?? 0) <= endOfDay) return String(v.version_id);
+    }
+    return '';
+  }, [versionList]);
+
+  // Whenever the as-of date (or the loaded version list) changes, re-resolve it to
+  // a concrete version_id and drive the render through that. An empty resolution
+  // (date before the first recording) is surfaced by the picker's helper text.
+  useEffect(() => {
+    if (!asOfDate) return;
+    const vid = resolveAsOf(asOfDate);
+    if (vid) setVersion(vid);
+  }, [asOfDate, resolveAsOf]);
+
+  // The picker's <TextField select> value: a synthetic sentinel for the as-of-date
+  // mode (so a resolved version_id doesn't get mistaken for a listed option), else
+  // the resolved version param itself.
+  const AS_OF = '__asof__';
+  const versionSelectValue = asOfDate ? AS_OF : version;
+  const asOfResolvedId = asOfDate ? resolveAsOf(asOfDate) : '';
+
+  // Handle a pick from the version <TextField select>. Latest/All-time/a version_id
+  // set the param directly and clear any as-of date; AS_OF switches to date mode.
+  const onVersionSelect = (val) => {
+    if (val === AS_OF) {
+      // Seed the date input with the newest version's day (or today) if empty.
+      if (!asOfDate) {
+        const newest = versionList[0]?.ver_start_sec;
+        const d = new Date((newest ? newest : Math.floor(Date.now() / 1000)) * 1000);
+        const p = (n) => String(n).padStart(2, '0');
+        setAsOfDate(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`);
+      }
+      return;
+    }
+    setAsOfDate('');
+    setVersion(val);
+  };
+
+  // Human label for the resolved version param, shown in the map footer.
+  const versionFooterLabel = useMemo(() => {
+    if (asOfDate) return `as of ${asOfDate}`;
+    if (version === 'latest') return 'newest revision';
+    if (version === 'all')    return 'all-time';
+    const v = versionList.find((x) => String(x.version_id) === String(version));
+    return v ? `version #${version} · ${fmtDate(v.ver_start_sec)}` : `version #${version}`;
+  }, [asOfDate, version, versionList]);
+
+  // ── Client-side mob filtering (checklist + search) ─────────────────────────
+  // The search box filters the cached index by name substring or numeric mob_id —
+  // no request per keystroke. Selected mobs float to the top so the current pick
+  // stays visible while searching. Mirrors the old server-side ORDER BY roughly.
+  const filteredMobs = useMemo(() => {
+    const q = mobQuery.trim().toLowerCase();
+    const asId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
+    let list = idxMobs;
+    if (q) {
+      list = idxMobs.filter((m) =>
+        (m.name && m.name.toLowerCase().includes(q)) || m.mob_id === asId);
+    }
+    return [...list].sort((a, b) => {
+      const sa = selectedMobs.has(a.mob_id) ? 0 : 1;
+      const sb = selectedMobs.has(b.mob_id) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [idxMobs, mobQuery, selectedMobs]);
 
   // Reset downstream selections whenever the server changes (manual pick).
   const onServerChange = (id) => {
     setServerIdState(id);
-    setMobQuery(''); setMobs([]); setSelectedMobs(new Set()); setFocusMob(null);
-    setZonesState([]); setZoneNo(''); setClusters([]); setBounds(null);
-    setZoneNames({}); setMobNames({});
+    setMobQuery(''); setIdxMobs([]); setSelectedMobs(new Set());
+    setZoneNo(''); setCellsAll([]); setTruncated(false); setBounds(null);
+    setZoneNames({}); setVersionList([]);
+    cellsCacheRef.current = new Map();   // bulk cell cache is per-server
+    setVersion('latest'); setAsOfDate('');
     setMapError('');
     // A manual server pick drops any deep-link highlight/pending zone.
     setHighlightSpots([]); setPendingZone('');
   };
 
   const mobName = useCallback(
-    (id) => mobNames[id]
-      || mobs.find((m) => m.mob_id === id)?.name
-      || `Mob #${id}`,
-    [mobNames, mobs],
+    (id) => mobNames[id] || `Mob #${id}`,
+    [mobNames],
   );
 
   const toggleMob = (id) => {
@@ -285,11 +413,6 @@ export function MonsterMapView({
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
-    });
-    // Focus mob (for zone derivation) = the first still-selected mob.
-    setFocusMob((prev) => {
-      if (prev === id) return null; // was toggled off
-      return prev ?? id;
     });
   };
 
@@ -300,26 +423,21 @@ export function MonsterMapView({
     setMobListOpen(selectedMobs.size === 0);
   }, [isMobile, selectedMobs.size]);
 
-  // ── Derive zones for the focus mob via /mobs/:id/spawns ────────────────────
-  // Skipped when an explicit zoneList is supplied (the picker lists those directly),
-  // so a dataless zone stays selectable and the mob checklist only filters clusters.
+  // ── Keep zoneNo valid against the derived zone options ─────────────────────
+  // In the user path the zone options are the union of the selected mobs' zones[]
+  // (from the index). When that set changes, keep the current pick if it's still
+  // valid; otherwise default to the first zone (or clear when none remain). Never
+  // clobber a deep-link's pending zone — that effect forces the target once it
+  // appears in the derived set. The admin path (zonesProvided) is left to its
+  // initialZone / manual pick logic.
   useEffect(() => {
     if (zonesProvided) return;
-    if (!serverId || focusMob == null) { setZonesState([]); setZoneNo(''); return; }
-    let alive = true;
-    setLoadingZones(true);
-    worldApi.mobSpawns(serverId, focusMob)
-      .then((r) => {
-        if (!alive) return;
-        const zs = Object.keys(r.zones || {}).map((z) => parseInt(z, 10))
-          .filter(Number.isFinite).sort((a, b) => a - b);
-        setZonesState(zs);
-        setZoneNo((prev) => (zs.includes(parseInt(prev, 10)) ? prev : (zs.length ? String(zs[0]) : '')));
-      })
-      .catch(() => { if (alive) { setZonesState([]); setZoneNo(''); } })
-      .finally(() => { if (alive) setLoadingZones(false); });
-    return () => { alive = false; };
-  }, [zonesProvided, serverId, focusMob]);
+    if (pendingZone) return;
+    setZoneNo((prev) => {
+      if (prev && zones.includes(parseInt(prev, 10))) return prev;
+      return zones.length ? String(zones[0]) : '';
+    });
+  }, [zonesProvided, zones, pendingZone]);
 
   // ── Preselect an initial zone (admin embed) ────────────────────────────────
   // When an explicit zone list is provided and an initialZone is given, select it
@@ -332,71 +450,76 @@ export function MonsterMapView({
     if (zones.includes(target)) setZoneNo(String(target));
   }, [zonesProvided, initialZone, zones]);
 
-  // ── Load the map for the selected mobs in the zone + bounds ────────────────
-  // All-Time (version=all) → 8-neighbour CLUSTERS (packs). Latest (version=latest)
-  // → newest-revision per-cell spots from the versioned spawns read, normalised
-  // into the same {center_x/z, min/max, hits…} shape so one renderer serves both.
+  // ── Bulk-load ALL mobs' cells for the zone + bounds (ONE fetch per target) ──
+  // /spawns-all returns every mob's cells for (server, zone, version) in a single
+  // query; we cache it in cellsCacheRef keyed by `${sid}|${zone}|${version}` so a
+  // revisit / re-render is instant and toggling mobs never re-fetches. The mob
+  // filter is applied downstream (visibleCells). Fires whenever a valid zone is in
+  // view — independent of the mob selection. Bounds are additive (404 → auto-fit).
   useEffect(() => {
-    if (!serverId || !zoneNo || selectedMobs.size === 0) {
-      setClusters([]); setBounds(null);
-      // In bare-zone mode we still want the zone's bounds so the fallback frame can
-      // render the background even with no mob selected. Fetch bounds standalone.
-      if (allowBareZone && serverId && zoneNo) {
-        let alive = true;
-        setMapError('');
-        worldApi.zoneBounds(serverId, zoneNo)
-          .then((r) => { if (alive) setBounds(r?.data && r.data.origin_x !== undefined ? r.data : null); })
-          .catch(() => { if (alive) setBounds(null); });
-        return () => { alive = false; };
-      }
-      return;
+    if (!serverId || !zoneNo) {
+      setCellsAll([]); setTruncated(false); setBounds(null);
+      return undefined;
     }
     let alive = true;
     setLoadingMap(true);
     setMapError('');
-    const mobIds = [...selectedMobs];
 
     // Zone bounds are additive/optional — a 404 just means we auto-fit.
     // The route returns { data: <row> }, so unwrap to the row here.
     const boundsP = worldApi.zoneBounds(serverId, zoneNo)
       .then((r) => r?.data ?? null).catch(() => null);
 
-    let dataP;
-    if (version === 'all') {
-      // Connected-cell packs per mob (clusters require a mob_id server-side).
-      dataP = Promise.all(mobIds.map((mid) =>
-        worldApi.zoneClusters(serverId, zoneNo, { mob_id: mid })
-          .then((r) => (r.data || []).map((c) => ({ ...c, mob_id: mid })))
-          .catch(() => []),
-      )).then((lists) => lists.flat());
-    } else {
-      // Newest-revision per-cell spots → wrap each cell as a single-cell pack.
-      dataP = Promise.all(mobIds.map((mid) =>
-        worldApi.zoneSpawns(serverId, zoneNo, { version: 'latest', mob_id: mid })
-          .then((r) => (r.data || []).map((s) => ({
-            mob_id: mid,
-            cells: 1,
-            center_x: s.cell_x, center_z: s.cell_z,
-            min_x: s.cell_x, max_x: s.cell_x, min_z: s.cell_z, max_z: s.cell_z,
-            hits: s.hits, passes: s.passes, instance_sum: s.instance_sum,
-            reliability: s.reliability, typical_group: s.typical_group,
-            density_score: s.density_score, y_avg: s.y_avg,
-            last_seen_sec: s.last_seen_sec,
-          })))
-          .catch(() => []),
-      )).then((lists) => lists.flat());
-    }
+    const key = `${serverId}|${zoneNo}|${version}`;
+    const cached = cellsCacheRef.current.get(key);
+    // A cached payload short-circuits the cell fetch (still refresh bounds cheaply,
+    // via its own 60s URL cache). truncated travels with the cached payload.
+    const dataP = cached
+      ? Promise.resolve(cached)
+      : worldApi.spawnsAll(serverId, zoneNo, { version })
+          .then((r) => {
+            const payload = { cells: Array.isArray(r?.cells) ? r.cells : [], truncated: !!r?.truncated };
+            cellsCacheRef.current.set(key, payload);
+            return payload;
+          });
 
     Promise.all([dataP, boundsP])
-      .then(([cl, bd]) => {
+      .then(([payload, bd]) => {
         if (!alive) return;
-        setClusters(cl);
+        setCellsAll(payload.cells);
+        setTruncated(payload.truncated);
         setBounds(bd && bd.origin_x !== undefined ? bd : null);
       })
-      .catch((e) => { if (alive) setMapError(e.data?.error || e.message || 'Failed to load map'); })
+      .catch((e) => {
+        if (!alive) return;
+        setCellsAll([]); setTruncated(false);
+        setMapError(e.data?.error || e.message || 'Failed to load map');
+      })
       .finally(() => { if (alive) setLoadingMap(false); });
     return () => { alive = false; };
-  }, [serverId, zoneNo, version, selectedMobs, allowBareZone]);
+  }, [serverId, zoneNo, version]);
+
+  // ── Visible cells → cluster-shaped nodes (client-side mob filter) ──────────
+  // Toggling mobs is a pure re-derivation over the cached bulk payload — ZERO
+  // requests. Each spawns-all cell (mob_id, cell_x/cell_z, x/z, density…) is
+  // wrapped as a single-cell "cluster" so the existing frame/renderer/highlight
+  // (which expect center_x/z + min/max + density_score) serve the per-cell heat.
+  const clusters = useMemo(() => {
+    if (selectedMobs.size === 0) return [];
+    return cellsAll
+      .filter((c) => selectedMobs.has(c.mob_id))
+      .map((c) => ({
+        mob_id: c.mob_id,
+        cells: 1,
+        center_x: c.cell_x, center_z: c.cell_z,
+        min_x: c.cell_x, max_x: c.cell_x, min_z: c.cell_z, max_z: c.cell_z,
+        hits: c.hits, passes: c.passes, instance_sum: c.instance_sum,
+        reliability: c.reliability, typical_group: c.typical_group,
+        density_score: c.density_score,
+        y_avg: c.y, x: c.x, z: c.z,
+        last_seen_sec: c.last_seen_sec,
+      }));
+  }, [cellsAll, selectedMobs]);
 
   // When the (server, zone) target changes, re-arm the background layer: assume it
   // may exist and let <image onError> decide, and restore the default-ON toggle.
@@ -664,7 +787,7 @@ export function MonsterMapView({
       <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>Monster Map</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
         Where monsters spawn, by server and zone. Pick a server and one or more mobs to
-        plot their spawn clusters — hotter colours mean higher density.
+        plot their spawn spots — hotter colours mean higher density.
       </Typography>
 
       {topError && <Alert severity="error" sx={{ mb: 2 }}>{topError}</Alert>}
@@ -700,7 +823,11 @@ export function MonsterMapView({
             select fullWidth size="small" label="Zone"
             value={zoneNo} onChange={(e) => setZoneNo(e.target.value)}
             disabled={!zones.length}
-            helperText={loadingZones ? 'Deriving…' : (!zonesProvided && focusMob == null ? 'Select a mob' : (zones.length ? '' : 'No zones'))}
+            helperText={
+              !zonesProvided && selectedMobs.size === 0
+                ? 'Select a mob'
+                : (loadingIndex && !zones.length ? 'Loading…' : (zones.length ? '' : 'No zones'))
+            }
           >
             {zones.map((z) => (
               <MenuItem key={z} value={String(z)}>{zoneLabel(z)}</MenuItem>
@@ -708,14 +835,54 @@ export function MonsterMapView({
           </TextField>
         </Grid>
         <Grid item xs={12} sm={3}>
-          <ToggleButtonGroup
-            size="small" exclusive value={version}
-            onChange={(_, v) => { if (v) setVersion(v); }}
-            sx={{ height: '100%', width: '100%', '& .MuiToggleButton-root': { flex: 1 } }}
+          {/* FINE version/date picker — Latest, All-time, individual versions (with
+              date + run-count + a "current" badge), and an as-of date that resolves
+              client-side to the newest version ≤ the chosen day. */}
+          <TextField
+            select fullWidth size="small" label="Data version"
+            value={versionSelectValue}
+            onChange={(e) => onVersionSelect(e.target.value)}
+            disabled={!serverId}
+            SelectProps={{
+              renderValue: (val) => {
+                if (val === AS_OF) return `As of ${asOfDate || '…'}`;
+                if (val === 'latest') return 'Latest';
+                if (val === 'all')    return 'All-time';
+                const v = versionList.find((x) => String(x.version_id) === String(val));
+                return v ? `#${v.version_id} · ${fmtDate(v.ver_start_sec)}` : `Version #${val}`;
+              },
+            }}
+            helperText={asOfDate && !asOfResolvedId ? 'No data on/before that date' : ''}
           >
-            <ToggleButton value="latest">Latest</ToggleButton>
-            <ToggleButton value="all">All-Time</ToggleButton>
-          </ToggleButtonGroup>
+            <MenuItem value="latest">Latest</MenuItem>
+            <MenuItem value="all">All-time</MenuItem>
+            <MenuItem value={AS_OF}>As of date…</MenuItem>
+            {asOfDate && (
+              <Box sx={{ px: 2, py: 1 }} onKeyDown={(e) => e.stopPropagation()}>
+                <TextField
+                  type="date" size="small" fullWidth label="As-of date"
+                  value={asOfDate}
+                  onChange={(e) => setAsOfDate(e.target.value)}
+                  InputLabelProps={{ shrink: true }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </Box>
+            )}
+            {versionList.length > 0 && <ListSubheader disableSticky>Versions</ListSubheader>}
+            {versionList.map((v) => (
+              <MenuItem key={v.version_id} value={String(v.version_id)}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <Typography variant="body2" noWrap>
+                    #{v.version_id} · {fmtDate(v.ver_start_sec)}
+                    {v.is_current ? '  ● current' : ''}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" noWrap>
+                    {(v.run_count ?? 0)} run{(v.run_count ?? 0) === 1 ? '' : 's'}
+                  </Typography>
+                </Box>
+              </MenuItem>
+            ))}
+          </TextField>
         </Grid>
       </Grid>
 
@@ -747,18 +914,18 @@ export function MonsterMapView({
               <Divider sx={{ mb: 0.5 }} />
               <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
                 {!serverId && <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>Select a server first.</Typography>}
-                {serverId && loadingMobs && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
-                {serverId && !loadingMobs && mobs.length === 0 && (
+                {serverId && loadingIndex && idxMobs.length === 0 && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
+                {serverId && !loadingIndex && filteredMobs.length === 0 && (
                   <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>No mobs found.</Typography>
                 )}
                 <List dense disablePadding>
-                  {mobs.map((m) => (
+                  {filteredMobs.map((m) => (
                     <ListItem key={m.mob_id} disablePadding>
                       <ListItemButton dense onClick={() => toggleMob(m.mob_id)} sx={{ py: 0 }}>
                         <Checkbox edge="start" size="small" checked={selectedMobs.has(m.mob_id)} tabIndex={-1} disableRipple />
                         <ListItemText
-                          primary={mobNames[m.mob_id] || m.name || `Mob #${m.mob_id}`}
-                          secondary={`#${m.mob_id}${m.level_min != null ? ` · Lv ${m.level_min}${m.level_max && m.level_max !== m.level_min ? `-${m.level_max}` : ''}` : ''} · ${m.sightings_total ?? 0} seen`}
+                          primary={m.name || `Mob #${m.mob_id}`}
+                          secondary={`#${m.mob_id} · ${Array.isArray(m.zones) ? m.zones.length : 0} zone${Array.isArray(m.zones) && m.zones.length === 1 ? '' : 's'}`}
                           primaryTypographyProps={{ variant: 'body2', noWrap: true }}
                           secondaryTypographyProps={{ variant: 'caption' }}
                         />
@@ -791,8 +958,8 @@ export function MonsterMapView({
 
             {!serverId && emptyHint('Pick a server to begin.')}
             {serverId && selectedMobs.size === 0 && !(allowBareZone && zoneNo) && emptyHint('Select one or more mobs from the list.')}
-            {serverId && selectedMobs.size > 0 && !zoneNo && !loadingZones && emptyHint('No zone data for the selected mob(s).')}
-            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && !allowBareZone && emptyHint('No spawn clusters for this selection.')}
+            {serverId && selectedMobs.size > 0 && !zoneNo && !loadingIndex && emptyHint('No zone data for the selected mob(s).')}
+            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && !allowBareZone && emptyHint('No spawns for this selection.')}
             {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length > 0 && visibleClusters.length === 0 && emptyHint('All spawns hidden by the "Hide seen-once" filter.')}
 
             {activeFrame && (
@@ -957,10 +1124,10 @@ export function MonsterMapView({
 
             {frame && (
               <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mt: 1 }}>
-                {visibleClusters.length} cluster(s) · zone {zoneNo}
-                {version === 'latest' ? ' · newest revision' : ' · all-time'}
+                {visibleClusters.length} cell(s) · zone {zoneNo} · {versionFooterLabel}
                 {hideSeenOnce && clusters.length > visibleClusters.length
                   ? ` · ${clusters.length - visibleClusters.length} low-confidence hidden` : ''}
+                {truncated ? ' · showing densest 5000 (capped)' : ''}
               </Typography>
             )}
           </Paper>

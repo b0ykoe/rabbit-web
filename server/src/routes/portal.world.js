@@ -654,6 +654,259 @@ router.get('/:serverId/zones/:zoneNo/map', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PHASE B — BULK USER-FACING MAP READS (B1)
+// The user MonsterMap loads the WHOLE browse structure per server ONCE and
+// caches it client-side, then toggles mobs from that cache with ZERO further
+// requests. These three ADDITIVE reads replace the per-mob request fan-out
+// (mobSpawns → zone derivation + per-mob zoneClusters/zoneSpawns) that tripped
+// the rate limiter. All are session-authed + visible-scoped (callerMaySeeServer,
+// NOT super-admin) and hard-LIMIT-capped. None touch the routes above.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── GET /:serverId/zones/:zoneNo/spawns-all?version=latest|all|<id> ───────────
+// ALL mobs' cells for ONE zone in ONE query — the bulk analogue of the single-
+// mob /zones/:z/spawns path, with the mob_id FILTER dropped and mob_id KEPT in
+// the SELECT + GROUP BY (so the client can bucket cells per mob and toggle them
+// from cache). Same versioned-read model as /spawns:
+//   version=all|<none> → all-time mob_spawn_cells, SUM the additive counters and
+//                         recompute reliability/typical_group/density_score.
+//   version=latest|<id>→ mob_spawn_cell_versions (newest-per-spot window / one
+//                         exact bucket), mob_id kept in SELECT (no per-mob filter).
+// Ranked density_score DESC behind the hard CELL_LIMIT (5000) — this is a HARD
+// cap; `truncated` tells the client the zone overflowed. NEVER whole-server: the
+// (server,zone) predicate is mandatory. Every cell also carries world x/z/y (from
+// zone_bounds when framed) so the client renders per-cell heat nodes directly.
+router.get('/:serverId/zones/:zoneNo/spawns-all', async (req, res) => {
+  const serverId = intParam(req.params.serverId);
+  const zoneNo   = intParam(req.params.zoneNo);
+  if (serverId == null || zoneNo == null) return res.status(400).json({ error: 'Bad serverId/zoneNo' });
+  if (!(await callerMaySeeServer(req, serverId))) {
+    return res.status(403).json({ error: 'Server not visible' });
+  }
+
+  const version = parseVersionParam(req.query.version);
+  if (version == null) return res.status(400).json({ error: 'Bad version' });
+
+  // World-coord frame (optional). When a zone_bounds row exists, cell centroids
+  // map to world metres: world = origin + cell*cell_size_m. Y stays the cell's
+  // observed y_avg. Without a frame, x/z fall back to the raw cell centroid.
+  const bounds = await db('zone_bounds')
+    .where({ server_id: serverId, zone_no: zoneNo })
+    .select('origin_x', 'origin_z', 'cell_size_m')
+    .first();
+  const cellSize = bounds && bounds.cell_size_m != null ? Number(bounds.cell_size_m) : null;
+  const originX  = bounds ? Number(bounds.origin_x) : null;
+  const originZ  = bounds ? Number(bounds.origin_z) : null;
+  const worldX = (cx) => (cellSize != null ? originX + cx * cellSize : cx);
+  const worldZ = (cz) => (cellSize != null ? originZ + cz * cellSize : cz);
+
+  let rows;
+  let resolved;
+
+  if (version.kind === 'all') {
+    // All-time bulk read: same per-cell rollup as the single-mob path but KEEP
+    // mob_id in the SELECT + GROUP BY so every mob's cells come back at once.
+    rows = await db('mob_spawn_cells')
+      .where({ server_id: serverId, zone_no: zoneNo })
+      .select('mob_id', 'cell_x', 'cell_z')
+      .select(db.raw('SUM(`hits`) as hits'))
+      .select(db.raw('SUM(`passes`) as passes'))
+      .select(db.raw('SUM(`instance_sum`) as instance_sum'))
+      .select(db.raw('AVG(y_avg) as y_avg'))
+      .select(db.raw('MAX(last_seen_sec) as last_seen_sec'))
+      .select(db.raw(`${REL_AGG}     as reliability`))
+      .select(db.raw(`${GROUP_AGG}   as typical_group`))
+      .select(db.raw(`${DENSITY_AGG} as density_score`))
+      .groupBy('mob_id', 'cell_x', 'cell_z')
+      .orderByRaw(`${DENSITY_AGG} DESC`)
+      .limit(CELL_LIMIT);
+    resolved = 'all';
+  } else {
+    // Versioned bulk read from mob_spawn_cell_versions. mob_id is KEPT (no per-mob
+    // filter). 'latest' = newest revision per spot (ROW_NUMBER window over the
+    // 6-col spot key); '<id>' = one exact version bucket. Ranked density_score
+    // DESC behind CELL_LIMIT.
+    const baseWhere = 'server_id = ? AND zone_no = ?';
+    const baseBinds = [serverId, zoneNo];
+    const selectCols =
+      'mob_id, cell_x, cell_z, channel, version_id, y_avg, hits, passes, instance_sum, last_seen_sec, ' +
+      `${REL_EXPR} as reliability, ${GROUP_EXPR} as typical_group, ${DENSITY_EXPR} as density_score`;
+
+    let sql;
+    let binds;
+    if (version.kind === 'latest') {
+      sql =
+        `SELECT ${selectCols} FROM (` +
+          `SELECT *, ROW_NUMBER() OVER (` +
+            `PARTITION BY server_id, zone_no, mob_id, cell_x, cell_z, channel ` +
+            `ORDER BY version_id DESC` +
+          `) AS rn ` +
+          `FROM mob_spawn_cell_versions WHERE ${baseWhere}` +
+        `) ranked WHERE rn = 1 ` +
+        `ORDER BY density_score DESC LIMIT ${CELL_LIMIT}`;
+      binds = baseBinds;
+    } else {
+      // exact bucket
+      sql =
+        `SELECT ${selectCols} FROM mob_spawn_cell_versions ` +
+        `WHERE ${baseWhere} AND version_id = ? ` +
+        `ORDER BY density_score DESC LIMIT ${CELL_LIMIT}`;
+      binds = [...baseBinds, version.version];
+    }
+    const result = await db.raw(sql, binds);
+    rows = Array.isArray(result) ? result[0] : (result.rows || result);
+    resolved = version.kind === 'exact' ? version.version : version.kind;
+  }
+
+  return res.json({
+    version:   resolved,
+    truncated: rows.length >= CELL_LIMIT,
+    cells: rows.map(r => {
+      const cellX = r.cell_x;
+      const cellZ = r.cell_z;
+      const y = r.y_avg == null ? null : Number(r.y_avg);
+      return {
+        mob_id:        r.mob_id,
+        cell_x:        cellX,
+        cell_z:        cellZ,
+        x:             worldX(cellX),
+        z:             worldZ(cellZ),
+        y,
+        hits:          Number(r.hits),
+        passes:        Number(r.passes),
+        instance_sum:  Number(r.instance_sum),
+        density_score: Number(r.density_score),
+        reliability:   Number(r.reliability),
+        typical_group: Number(r.typical_group),
+        last_seen_sec: r.last_seen_sec == null ? null : Number(r.last_seen_sec),
+      };
+    }),
+  });
+});
+
+// ── GET /:serverId/zone-index ─────────────────────────────────────────────────
+// The WHOLE-server browse index in ONE query set — this REPLACES the client's
+// per-mob zone derivation (mobSpawns) AND folds in /names labelling:
+//   mobs      — the catalog (mob_names ∪ mob_catalog, exactly like the admin
+//               Phase A union; name = mob_names ?? mob_catalog.name), each with
+//               the DISTINCT zone_no list it appears in.
+//   zoneNames — { "<zone_no>": "<name>" } from game_zones.
+// The (mob_id, zone_no) pairs come from a DISTINCT rollup over mob_spawn_cells
+// (built into zones[] arrays in JS — NOT via GROUP_CONCAT). A mob with no spawn
+// cells simply gets an empty zones[]. Session-authed + visible-scoped.
+router.get('/:serverId/zone-index', async (req, res) => {
+  const serverId = intParam(req.params.serverId);
+  if (serverId == null) return res.status(400).json({ error: 'Bad serverId' });
+  if (!(await callerMaySeeServer(req, serverId))) {
+    return res.status(403).json({ error: 'Server not visible' });
+  }
+
+  const [mobNameRows, mobCatalogRows, mobZoneRows, zoneRows] = await Promise.all([
+    // Curated names (prefer this name).
+    db('mob_names').where('server_id', serverId).select('mob_id', 'name'),
+    // Observed catalog rows (name fallback + metrics for label/sort).
+    db('mob_catalog').where('server_id', serverId)
+      .select('mob_id', 'name', 'level_min', 'level_max', 'sightings_total'),
+    // DISTINCT (mob_id, zone_no) rollup — the zones[] source. Built into arrays
+    // in JS below (NO GROUP_CONCAT), ordered so zones[] come out ascending.
+    db('mob_spawn_cells').where('server_id', serverId)
+      .distinct('mob_id', 'zone_no')
+      .orderBy('mob_id', 'asc').orderBy('zone_no', 'asc'),
+    // Zone label map.
+    db('game_zones').where('server_id', serverId).select('zone_no', 'name'),
+  ]);
+
+  // (mob_id, zone_no) DISTINCT pairs → per-mob ascending zones[] arrays.
+  const zonesByMob = new Map();
+  for (const r of mobZoneRows) {
+    let arr = zonesByMob.get(r.mob_id);
+    if (!arr) { arr = []; zonesByMob.set(r.mob_id, arr); }
+    arr.push(r.zone_no);
+  }
+
+  // MONSTER UNION (mirror admin Phase A): union the curated + observed id-sets so
+  // a seen-but-unnamed mob still surfaces; name prefers mob_names, falls back to
+  // mob_catalog.name, else null.
+  const mobNameById    = new Map(mobNameRows.map(r => [r.mob_id, r.name]));
+  const mobCatalogById = new Map(mobCatalogRows.map(r => [r.mob_id, r]));
+  const mobIdSet = new Set();
+  for (const r of mobNameRows)    mobIdSet.add(r.mob_id);
+  for (const r of mobCatalogRows) mobIdSet.add(r.mob_id);
+  for (const mobId of zonesByMob.keys()) mobIdSet.add(mobId);
+
+  const mobs = [...mobIdSet].sort((a, b) => a - b).map((mob_id) => {
+    const cat  = mobCatalogById.get(mob_id) || null;
+    const name = mobNameById.has(mob_id) ? mobNameById.get(mob_id) : (cat && cat.name != null ? cat.name : null);
+    return {
+      mob_id,
+      name,
+      level_min:       cat ? cat.level_min : null,
+      level_max:       cat ? cat.level_max : null,
+      sightings_total: cat && cat.sightings_total != null ? Number(cat.sightings_total) : null,
+      zones:           zonesByMob.get(mob_id) || [],
+    };
+  });
+
+  const zoneNames = {};
+  for (const r of zoneRows) zoneNames[r.zone_no] = r.name;
+
+  res.json({ mobs, zoneNames });
+});
+
+// ── GET /:serverId/versions?zone_no=<n> ───────────────────────────────────────
+// A USER-SAFE projection of spawn_version_meta for the server (optionally to one
+// zone) — powers the FINE version/date picker. Newest-first. is_current =
+// version_id == MAX(version_id) for that (server[,zone]), via the SAME per-zone
+// MAX subquery as /sessions. ABSOLUTELY NO user_id/session_id/recorder fields —
+// this is NOT the admin /sessions route. Session-authed + visible-scoped.
+router.get('/:serverId/versions', async (req, res) => {
+  const serverId = intParam(req.params.serverId);
+  if (serverId == null) return res.status(400).json({ error: 'Bad serverId' });
+  if (!(await callerMaySeeServer(req, serverId))) {
+    return res.status(403).json({ error: 'Server not visible' });
+  }
+
+  const zoneNo = intParam(req.query.zone_no);
+
+  // Meta rows joined to a per-zone MAX(version_id) so is_current is a single
+  // subquery (no ROW_NUMBER window). Newest-first, LIMIT-capped (SESSIONS_LIMIT).
+  const metaWhere = ['m.server_id = ?'];
+  const metaBinds = [serverId];
+  if (zoneNo != null) { metaWhere.push('m.zone_no = ?'); metaBinds.push(zoneNo); }
+
+  const sql =
+    `SELECT ` +
+      `m.zone_no, m.version_id, m.ver_start_sec, m.ver_end_sec, m.run_count, ` +
+      `mx.max_version ` +
+    `FROM spawn_version_meta m ` +
+    `JOIN ( ` +
+      `SELECT server_id, zone_no, MAX(version_id) AS max_version ` +
+      `FROM spawn_version_meta WHERE server_id = ? GROUP BY server_id, zone_no ` +
+    `) mx ON mx.server_id = m.server_id AND mx.zone_no = m.zone_no ` +
+    `WHERE ${metaWhere.join(' AND ')} ` +
+    `ORDER BY m.version_id DESC ` +
+    `LIMIT ${SESSIONS_LIMIT}`;
+
+  const binds = [serverId, ...metaBinds];
+  const result = await db.raw(sql, binds);
+  const rows = Array.isArray(result) ? result[0] : (result.rows || result);
+
+  res.json({
+    server_id: serverId,
+    zone_no:   zoneNo ?? null,
+    data: rows.map(r => ({
+      version_id:    String(r.version_id),
+      zone_no:       r.zone_no,
+      ver_start_sec: Number(r.ver_start_sec),
+      ver_end_sec:   Number(r.ver_end_sec),
+      run_count:     Number(r.run_count),
+      // is_current iff this version == the newest version for its (server,zone).
+      is_current:    String(r.version_id) === String(r.max_version),
+    })),
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SESSION-SCOPED READS (recording status, my tokens, scan sessions, coverage,
 // version diff). All ADDITIVE, session-authed, visible-scoped for non-admins,
 // LIMIT-capped. None touch the existing routes/responses/auth/CSRF above.
