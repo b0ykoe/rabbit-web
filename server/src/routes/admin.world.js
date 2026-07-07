@@ -42,15 +42,34 @@ const router = Router();
 // Where the image files live on disk. Sibling of the Releases dll/loader dirs
 // under the same private root so the same BOT_PRIVATE_DIR env governs both.
 const ZONE_MAP_DIR = path.join(config.bot.privateDir, 'zone_maps');
-const ZONE_MAP_MAX_BYTES = 8 * 1024 * 1024;   // 8 MB cap for a single background image
+// 32 MB cap for a single background image. Zone maps are large: a 4096 PNG or a
+// hybrid SVG that embeds a 2048 terrain raster easily blows past the old 8 MB cap
+// (which surfaced as MulterError: File too large on real uploads).
+const ZONE_MAP_MAX_BYTES = 32 * 1024 * 1024;
+const ZONE_MAP_MAX_MB    = Math.round(ZONE_MAP_MAX_BYTES / (1024 * 1024));
 
 // DISK multer into the shared _tmp staging dir (identical to Releases). No
 // fileFilter here — we enforce type by MIME *and* magic bytes in the route so a
-// spoofed Content-Type can't smuggle a non-image through. Size capped at 8 MB.
+// spoofed Content-Type can't smuggle a non-image through. Size capped at 32 MB.
 const zoneMapUpload = multer({
   dest: path.join(config.bot.privateDir, '_tmp'),
   limits: { fileSize: ZONE_MAP_MAX_BYTES },
 });
+
+// Wrap multer.single so an over-limit upload (or any multer error) returns a
+// clean 400 JSON instead of bubbling a MulterError to the generic error handler
+// (which logs "[error] MulterError: File too large" and 500s the request).
+function zoneMapUploadSingle(req, res, next) {
+  zoneMapUpload.single('file')(req, res, (err) => {
+    if (err) {
+      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      return res.status(400).json({
+        error: tooBig ? `File too large (max ${ZONE_MAP_MAX_MB} MB)` : 'Upload failed',
+      });
+    }
+    next();
+  });
+}
 
 // PNG 8-byte signature.
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -515,9 +534,9 @@ router.get('/servers/:id/zone-maps', requireSuperAdmin, async (req, res) => {
 
 // POST /api/admin/world/servers/:id/zones/:zoneNo/map — upload ONE background
 // image (field 'file'). Accepts svg or png only, validated by MIME + magic
-// bytes, ≤8 MB. Stored under <privateDir>/zone_maps/ with a deterministic,
+// bytes, ≤32 MB. Stored under <privateDir>/zone_maps/ with a deterministic,
 // path-free name. UPSERTs the zone_maps row (removes any prior file first).
-router.post('/servers/:id/zones/:zoneNo/map', requireSuperAdmin, zoneMapUpload.single('file'), async (req, res) => {
+router.post('/servers/:id/zones/:zoneNo/map', requireSuperAdmin, zoneMapUploadSingle, async (req, res) => {
   const serverId = parseInt(req.params.id, 10);
   const zoneNo   = parseInt(req.params.zoneNo, 10);
 
@@ -538,7 +557,7 @@ router.post('/servers/:id/zones/:zoneNo/map', requireSuperAdmin, zoneMapUpload.s
   try { buf = fs.readFileSync(req.file.path); } catch { cleanupTmp(); return res.status(400).json({ error: 'Could not read upload' }); }
 
   if (buf.length === 0) { cleanupTmp(); return res.status(400).json({ error: 'Empty file' }); }
-  if (buf.length > ZONE_MAP_MAX_BYTES) { cleanupTmp(); return res.status(400).json({ error: 'File too large (max 8 MB)' }); }
+  if (buf.length > ZONE_MAP_MAX_BYTES) { cleanupTmp(); return res.status(400).json({ error: `File too large (max ${ZONE_MAP_MAX_MB} MB)` }); }
 
   const sniffed = sniffImageFormat(buf);
   const mime = (req.file.mimetype || '').toLowerCase();
