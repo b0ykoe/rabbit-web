@@ -144,6 +144,25 @@ export const adminApi = {
     formData.append('file', file);
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/zones/${encodeURIComponent(zoneNo)}/bounds`, { method: 'POST', body: formData });
   },
+
+  // Signed offset-override system (super-admin only) — additive. A single Ed25519
+  // signing keypair (getOffsetKey reads its public half; generateOffsetKey mints a
+  // new one, password-gated) authenticates per-server offset payloads the bot then
+  // verifies. importOffsetCatalog uploads the bot-exported symbol catalog (multipart
+  // FormData, single field "file" — apiFetch skips the JSON Content-Type so the
+  // browser sets the multipart boundary; CSRF + credentials still apply).
+  // get/putServerOffsets read+write one server's offset overrides; signServerOffsets
+  // (password-gated) signs the current set so the bot accepts it.
+  getOffsetKey:        ()           => apiFetch('/api/admin/world/offset-key'),
+  generateOffsetKey:   (password)   => apiFetch('/api/admin/world/offset-key/generate', { method: 'POST', body: JSON.stringify({ password }) }),
+  importOffsetCatalog: (file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return apiFetch('/api/admin/world/offset-catalog/import', { method: 'POST', body: fd });
+  },
+  getServerOffsets:    (id)         => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`),
+  putServerOffsets:    (id, body)   => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
+  signServerOffsets:   (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────
