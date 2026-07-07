@@ -122,9 +122,12 @@ const CELLS = {
 // mob_spawn_cell_versions — the versioned heat. version_id is kept in the key
 // (NOT collapsed) — only channel folds.
 const CELL_VERSIONS = {
-  cols: 'version_id, hits, passes, instance_sum, last_hit_run_id, last_pass_run_id, y_avg, first_seen_sec, last_seen_sec',
+  // version_id is a KEY column (see keyCols) so foldChild already emits it in the
+  // key list, SELECT, and GROUP BY. It must NOT be repeated in cols/exprs or the
+  // generated INSERT column list carries a DUPLICATE `version_id`.
+  cols: 'hits, passes, instance_sum, last_hit_run_id, last_pass_run_id, y_avg, first_seen_sec, last_seen_sec',
   exprs:
-    'version_id, SUM(hits), SUM(passes), SUM(instance_sum), ' +
+    'SUM(hits), SUM(passes), SUM(instance_sum), ' +
     'MAX(last_hit_run_id), MAX(last_pass_run_id), MAX(y_avg), ' +
     'MIN(first_seen_sec), MAX(last_seen_sec)',
   onDup:
@@ -159,6 +162,16 @@ async function foldFlatChild(trx, table, survivorId, srcId, keyCols, cols, exprs
   );
   await trx.raw(`DELETE FROM \`${table}\` WHERE server_id = ?`, [srcId]);
 }
+
+// This migration MIXES DDL (add column / create table / drop index) with a
+// transactional data fold. In MySQL every DDL statement IMPLICITLY COMMITS the
+// open transaction, which breaks knex's default per-migration transaction wrapper
+// (error #805 "Transaction was implicitly committed, do not mix transactions and
+// DDL"). So disable the wrapper: the DDL runs in autocommit, and the row fold
+// runs inside its OWN explicit knex.transaction() below (the only part that needs
+// atomicity). Every step is independently guarded, so a mid-way failure + re-run
+// is a no-op.
+export const config = { transaction: false };
 
 // ── up ───────────────────────────────────────────────────────────────────────
 
