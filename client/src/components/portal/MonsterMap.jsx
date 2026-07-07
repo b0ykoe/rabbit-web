@@ -483,6 +483,33 @@ export default function MonsterMap() {
 
   const serverLabel = (s) => s.name || `Server #${s.id}`;
 
+  // Auto-zoom + centre on the deep-linked highlighted spot(s) — once per highlight
+  // (guarded by a key so later frame recomputes or the user's own pan/zoom don't
+  // yank the view back). Fires after the clusters load (frame ready).
+  const autoZoomedRef = useRef('');
+  useEffect(() => {
+    if (!frame || highlightSpots.length === 0) return;
+    const hlNodes = frame.nodes.filter((n) => isHighlighted(n.c));
+    if (!hlNodes.length) return;
+    const key = `${serverId}|${zoneNo}|${version}|` +
+      highlightSpots.map((s) => `${s.mob_id}:${s.center_x}:${s.center_z}`).join(',');
+    if (autoZoomedRef.current === key) return;
+    autoZoomedRef.current = key;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of hlNodes) {
+      minX = Math.min(minX, n.cx - n.r); maxX = Math.max(maxX, n.cx + n.r);
+      minY = Math.min(minY, n.cy - n.r); maxY = Math.max(maxY, n.cy + n.r);
+    }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    const span = Math.max(maxX - minX, maxY - minY) + 80; // padding around the spot(s)
+    const nw = clamp(Math.max(span, SVG_W / 6), MIN_VIEW, SVG_W);
+    setView({
+      w: nw, h: nw,
+      x: clamp(cx - nw / 2, 0, SVG_W - nw),
+      y: clamp(cy - nw / 2, 0, SVG_H - nw),
+    });
+  }, [frame, highlightSpots, isHighlighted, serverId, zoneNo, version]);
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <Box>
@@ -623,11 +650,10 @@ export default function MonsterMap() {
                 >
                   <style>{`
                     @keyframes mmHighlightPulse {
-                      0%   { stroke-opacity: 0.95; stroke-width: 2.5; }
-                      50%  { stroke-opacity: 0.35; stroke-width: 4; }
-                      100% { stroke-opacity: 0.95; stroke-width: 2.5; }
+                      0%, 100% { stroke-opacity: 0.95; }
+                      50%      { stroke-opacity: 0.2; }
                     }
-                    .mm-highlight-ring { animation: mmHighlightPulse 1.4s ease-in-out infinite; }
+                    .mm-highlight-ring { animation: mmHighlightPulse 1.3s ease-in-out infinite; }
                   `}</style>
                   {/* background image layer — FIRST child so it sits UNDER the
                       spawn points; framed to the zone AABB. Always mounted (when a
@@ -647,30 +673,43 @@ export default function MonsterMap() {
                   {/* frame border */}
                   <rect x={PAD / 2} y={PAD / 2} width={SVG_W - PAD} height={SVG_H - PAD}
                     fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" rx="4" />
-                  {frame.nodes.map((n, i) => {
-                    const hl = isHighlighted(n.c);
+                  {/* base heat circles */}
+                  {frame.nodes.map((n, i) => (
+                    <circle
+                      key={`${n.c.mob_id}-${i}`}
+                      cx={n.cx} cy={n.cy} r={n.r}
+                      fill={heatColor(n.t)}
+                      fillOpacity={0.55}
+                      stroke={heatColor(n.t)}
+                      strokeOpacity={0.9}
+                      strokeWidth={1}
+                      onMouseEnter={() => setHover({ n, mobName: mobName(n.c.mob_id) })}
+                    />
+                  ))}
+                  {/* highlight pass — drawn AFTER all base circles so it's on top.
+                      Black halo + bright inner ring (reads on any background) +
+                      a screen-constant floating label (name + #mob_id). */}
+                  {frame.nodes.filter((n) => isHighlighted(n.c)).map((n, i) => {
+                    const ls = view.w / SVG_W;                 // screen-constant scale
+                    const label = `${mobName(n.c.mob_id)} · #${n.c.mob_id}`;
+                    const fontPx = 11, padPx = 5;
+                    const wPx = label.length * (fontPx * 0.58) + padPx * 2;
+                    const hPx = fontPx + padPx * 2;
+                    const by = n.cy - n.r - (7 + hPx) * ls;
                     return (
-                      <g key={`${n.c.mob_id}-${i}`}>
-                        <circle
-                          cx={n.cx} cy={n.cy} r={n.r}
-                          fill={heatColor(n.t)}
-                          fillOpacity={0.55}
-                          stroke={heatColor(n.t)}
-                          strokeOpacity={0.9}
-                          strokeWidth={1}
-                          onMouseEnter={() => setHover({ n, mobName: mobName(n.c.mob_id) })}
-                        />
-                        {hl && (
-                          <circle
-                            cx={n.cx} cy={n.cy} r={n.r + 4}
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth={2.5}
-                            strokeOpacity={0.95}
-                            className="mm-highlight-ring"
-                            style={{ pointerEvents: 'none' }}
-                          />
-                        )}
+                      <g key={`hl-${n.c.mob_id}-${i}`} style={{ pointerEvents: 'none' }}>
+                        <circle cx={n.cx} cy={n.cy} r={n.r + 5} fill="none"
+                          stroke="#000" strokeWidth={5} strokeOpacity={0.9}
+                          vectorEffect="non-scaling-stroke" />
+                        <circle cx={n.cx} cy={n.cy} r={n.r + 5} fill="none"
+                          stroke="#ffd54a" strokeWidth={2.5} strokeOpacity={0.95}
+                          vectorEffect="non-scaling-stroke" className="mm-highlight-ring" />
+                        <rect x={n.cx - (wPx * ls) / 2} y={by} width={wPx * ls} height={hPx * ls}
+                          rx={3 * ls} fill="rgba(0,0,0,0.82)" stroke="#000" strokeWidth={1.5}
+                          vectorEffect="non-scaling-stroke" />
+                        <text x={n.cx} y={by + (hPx * ls) / 2} textAnchor="middle"
+                          dominantBaseline="central" fontSize={fontPx * ls} fill="#fff"
+                          fontWeight={600}>{label}</text>
                       </g>
                     );
                   })}
