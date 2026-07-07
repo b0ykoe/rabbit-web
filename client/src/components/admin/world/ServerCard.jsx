@@ -11,7 +11,9 @@ import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import ExportCsvMenu from './ExportCsvMenu.jsx';
 import CoverageStatusPill from './CoverageStatusPill.jsx';
 
-// Relative "time ago" for the last_seen footer. Server sends epoch seconds.
+// Relative "time ago" for the footer. Server sends epoch seconds. Fed by
+// data_last_seen = MAX(mob_catalog.last_seen), the true "data last updated" clock
+// (game_servers.last_seen is stamped at create and never advanced by ingest).
 const fmtRelative = (sec) => {
   if (!sec) return 'never';
   const diff = Math.floor(Date.now() / 1000) - sec;
@@ -158,7 +160,7 @@ export default function ServerCard({ server, onChanged }) {
       <CardActions sx={{ justifyContent: 'space-between', px: 2, py: 1 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           <Typography variant="caption" color="text.secondary">
-            Last seen {fmtRelative(server.last_seen)}
+            Updated {fmtRelative(server.data_last_seen)}
           </Typography>
           <Typography variant="caption" color="text.disabled">
             {cellCount} cells

@@ -353,7 +353,7 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     // "N/M zones framed / backed" without a per-server drill-in.
     const [
       mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts, npcNameCounts,
-      dataZoneCounts, boundsZoneCounts, bgZoneCounts,
+      dataZoneCounts, boundsZoneCounts, bgZoneCounts, dataSeenRows,
     ] = await Promise.all([
       db('mob_catalog').whereIn('server_id', ids)
         .groupBy('server_id')
@@ -386,6 +386,12 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       db('zone_maps').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(DISTINCT `zone_no`) as zones_with_background')),
+      // data_last_seen = the freshest ingest timestamp per server. game_servers
+      // .last_seen is stamped at create and never advanced by ingest (stale), so
+      // the true "data last updated" clock is MAX(mob_catalog.last_seen).
+      db('mob_catalog').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('MAX(`last_seen`) as data_last_seen')),
     ]);
     const mobMap  = Object.fromEntries(mobCounts.map(c => [c.server_id, Number(c.mob_count)]));
     const cellMap = Object.fromEntries(cellCounts.map(c => [c.server_id, c]));
@@ -395,6 +401,9 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     const dataZoneMap   = Object.fromEntries(dataZoneCounts.map(c => [c.server_id, Number(c.zones_with_data)]));
     const boundsZoneMap = Object.fromEntries(boundsZoneCounts.map(c => [c.server_id, Number(c.zones_with_bounds)]));
     const bgZoneMap     = Object.fromEntries(bgZoneCounts.map(c => [c.server_id, Number(c.zones_with_background)]));
+    // null when the server has no mob_catalog rows (grouped SELECT omits it); a
+    // NULL MAX (all rows null last_seen) also normalizes to null below.
+    const dataSeenMap   = Object.fromEntries(dataSeenRows.map(c => [c.server_id, c.data_last_seen != null ? Number(c.data_last_seen) : null]));
     const ipsMap  = new Map();
     for (const h of hostRows) {
       if (!ipsMap.has(h.server_id)) ipsMap.set(h.server_id, []);
@@ -412,6 +421,7 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       s.zones_with_data       = dataZoneMap[s.id]   || 0;
       s.zones_with_bounds     = boundsZoneMap[s.id] || 0;
       s.zones_with_background = bgZoneMap[s.id]      || 0;
+      s.data_last_seen    = s.id in dataSeenMap ? dataSeenMap[s.id] : null;
       s.known_ips         = ipsMap.get(s.id) || [];
     }
   }
@@ -866,24 +876,19 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
   // mobsTotal / npcsTotal are UNFILTERED counts so the mobs_named / npcs_named
   // rollups stay accurate even when the ?q search narrows / the caps truncate the
   // returned lists. The NPC ?q filter matches name OR type (or an exact npc_id).
-  const [nameZones, boundZones, imageZones, dataZones, mobRows, mobsTotalRow, npcRows, npcsTotalRow] = await Promise.all([
+  const [nameZones, boundZones, imageZones, dataZones, mobNameRows, mobCatalogRows, mobsTotalRow, dataSeenRow, npcRows, npcsTotalRow] = await Promise.all([
     db('game_zones').where('server_id', serverId).select('zone_no', 'name'),
     db('zone_bounds').where('server_id', serverId).distinct('zone_no').select('zone_no'),
     db('zone_maps').where('server_id', serverId).distinct('zone_no').select('zone_no'),
     db('mob_spawn_cells').where('server_id', serverId).distinct('zone_no').select('zone_no'),
-    (() => {
-      let mq = db('mob_names').where('server_id', serverId)
-        .select('mob_id', 'name');
-      if (q) {
-        mq = mq.where(function () {
-          this.where('name', 'like', `%${q}%`);
-          const asId = parseInt(q, 10);
-          if (Number.isFinite(asId)) this.orWhere('mob_id', asId);
-        });
-      }
-      return mq.orderBy('mob_id', 'asc').limit(MOB_CAP);
-    })(),
+    // Curated names (prefer this name) — NO ?q filter here: the ?q match is applied
+    // in JS AFTER the union so a seen-but-unnamed catalog row can match by mob_id.
+    db('mob_names').where('server_id', serverId).select('mob_id', 'name'),
+    // Observed catalog rows widen each mob with level/maxhp/sightings/last_seen.
+    db('mob_catalog').where('server_id', serverId)
+      .select('mob_id', 'name', 'level_min', 'level_max', 'maxhp_min', 'maxhp_max', 'sightings_total', 'last_seen'),
     db('mob_names').where('server_id', serverId).count('* as c').first(),
+    db('mob_catalog').where('server_id', serverId).max('last_seen as data_last_seen').first(),
     (() => {
       let nq = db('game_npcs').where('server_id', serverId)
         .select('npc_id', 'name', 'type', 'zone_no');
@@ -899,8 +904,45 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
     })(),
     db('game_npcs').where('server_id', serverId).count('* as c').first(),
   ]);
-  const mobsTotal = Number(mobsTotalRow?.c ?? 0);
+  const mobsTotal = Number(mobsTotalRow?.c ?? 0);   // NAMED count (mob_names only)
   const npcsTotal = Number(npcsTotalRow?.c ?? 0);
+  const dataLastSeen = dataSeenRow?.data_last_seen != null ? Number(dataSeenRow.data_last_seen) : null;
+
+  // MONSTER UNION — a JS union of the two id-sets (curated mob_names ∪ observed
+  // mob_catalog) so a seen-but-unnamed mob still surfaces (a LEFT JOIN would drop
+  // it). Name rule: prefer the curated mob_names name, fall back to mob_catalog
+  // .name, else null. Catalog metrics (level/maxhp/sightings/last_seen) come from
+  // the catalog row when present, null otherwise (named-but-never-observed).
+  const mobNameById    = new Map(mobNameRows.map(r => [r.mob_id, r.name]));
+  const mobCatalogById = new Map(mobCatalogRows.map(r => [r.mob_id, r]));
+  const mobIdSet = new Set();
+  for (const r of mobNameRows)    mobIdSet.add(r.mob_id);
+  for (const r of mobCatalogRows) mobIdSet.add(r.mob_id);
+
+  const qLower = q.toLowerCase();
+  const qAsId  = q ? parseInt(q, 10) : NaN;
+  let mobs = [...mobIdSet].sort((a, b) => a - b).map((mob_id) => {
+    const cat  = mobCatalogById.get(mob_id) || null;
+    const name = mobNameById.has(mob_id) ? mobNameById.get(mob_id) : (cat && cat.name != null ? cat.name : null);
+    return {
+      mob_id,
+      name,
+      level_min:       cat ? cat.level_min : null,
+      level_max:       cat ? cat.level_max : null,
+      maxhp_min:       cat ? cat.maxhp_min : null,
+      maxhp_max:       cat ? cat.maxhp_max : null,
+      sightings_total: cat && cat.sightings_total != null ? Number(cat.sightings_total) : null,
+      last_seen:       cat && cat.last_seen != null ? Number(cat.last_seen) : null,
+    };
+  });
+  // ?q filter applied in JS (post-union): match name OR mob_id, mirroring the
+  // pre-union SQL filter but now able to hit catalog-only rows by id.
+  if (q) {
+    mobs = mobs.filter(m =>
+      (m.name != null && m.name.toLowerCase().includes(qLower)) ||
+      (Number.isFinite(qAsId) && m.mob_id === qAsId));
+  }
+  mobs = mobs.slice(0, MOB_CAP);
 
   const nameByZone = new Map(nameZones.map(r => [r.zone_no, r.name]));
   const boundsSet  = new Set(boundZones.map(r => r.zone_no));
@@ -924,8 +966,9 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
   const counts = {
     zones_total:        zones.length,
     zones_named:        zones.filter(z => z.name != null).length,
-    mobs_named:         mobsTotal,
+    mobs_named:         mobsTotal,   // NAMED count only — NOT inflated by seen-but-unnamed.
     npcs_named:         npcsTotal,
+    data_last_seen:     dataLastSeen,   // MAX(mob_catalog.last_seen); null when no data.
     missing_name:       zones.filter(z => z.name == null).length,
     missing_background: zones.filter(z => !z.has_background).length,
     missing_data:       zones.filter(z => !z.has_data).length,
@@ -935,7 +978,7 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
   res.json({
     counts,
     zones,
-    mobs: mobRows.map(r => ({ mob_id: r.mob_id, name: r.name })),
+    mobs,
     npcs: npcRows.map(r => ({ npc_id: r.npc_id, name: r.name, type: r.type, zone_no: r.zone_no })),
   });
 });

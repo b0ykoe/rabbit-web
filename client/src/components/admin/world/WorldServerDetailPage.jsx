@@ -17,6 +17,19 @@ import CoverageStatusPill from './CoverageStatusPill.jsx';
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
 const DEFAULT_TAB = 'overview';
 
+// Relative "time ago" from epoch seconds. Used for the "Data last updated" clock
+// (overview.counts.data_last_seen = MAX(mob_catalog.last_seen)). Null → "never".
+const fmtRelative = (sec) => {
+  if (!sec) return 'never';
+  const diff = Math.floor(Date.now() / 1000) - sec;
+  if (diff < 0) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`;
+  return new Date(sec * 1000).toLocaleDateString();
+};
+
 // The per-server detail shell (P1). Resolves :id + :tab, loads the server ROW (from
 // the admin list — there is no GET /servers/:id) plus its coverage overview, renders
 // a header + tab bar, and mounts the active tab body. The Settings tab is real; the
@@ -141,6 +154,7 @@ export default function WorldServerDetailPage() {
   }
 
   const displayName = server?.name || `Server #${id}`;
+  const dataLastSeen = overview?.counts?.data_last_seen ?? null;
 
   return (
     <Box>
@@ -179,6 +193,11 @@ export default function WorldServerDetailPage() {
               />
             ))}
           </Stack>
+        )}
+        {!(loading && !server) && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+            Data last updated {fmtRelative(dataLastSeen)}
+          </Typography>
         )}
       </Box>
 

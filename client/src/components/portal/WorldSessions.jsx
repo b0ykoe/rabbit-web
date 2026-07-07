@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, MenuItem, TextField, Chip, Alert,
@@ -61,6 +61,11 @@ export default function WorldSessions() {
   // Which session row is expanded (key = `${version_id}|${zone_no}`); one at a time.
   const [expandedKey, setExpandedKey] = useState(null);
 
+  // Per-server mob name map { [mob_id]: name } from worldApi.names (cachedGet 60s),
+  // fetched once on server-select so the sessions/diff UI can label mobs by name
+  // instead of a bare #id.
+  const [mobNames, setMobNames] = useState({});
+
   // Sessions
   const [sessions, setSessions] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(false);
@@ -96,10 +101,19 @@ export default function WorldSessions() {
   const onServerChange = (id) => {
     setServerId(id);
     setExpandedKey(null);
+    setMobNames({});
     setSessions([]); setSessionsError('');
     setCoverage([]); setCoverageError('');
     setDiffZone(''); setDiffA(''); setDiffB(''); setDiff(null); setDiffError('');
   };
+
+  // Resolve a mob's display name: prefer the per-server names map, fall back to a
+  // name already on the row (mob_name), else "#<id>". Stable across renders so it
+  // can be handed to memo-free child renders.
+  const mobLabel = useCallback(
+    (mobId, fallbackName) => mobNames[mobId] ?? fallbackName ?? (mobId != null ? `#${mobId}` : '—'),
+    [mobNames],
+  );
 
   // Open the Monster Map focused on what this session (or a single spot) renewed.
   // Contract: react-router state { serverId, zoneNo, versionId, highlightSpots }.
@@ -125,6 +139,18 @@ export default function WorldSessions() {
       .then((r) => { if (alive) setSessions(r.data || []); })
       .catch((e) => { if (alive) setSessionsError(e.data?.error || e.message || 'Failed to load sessions'); })
       .finally(() => { if (alive) setLoadingSessions(false); });
+    return () => { alive = false; };
+  }, [serverId, isSuperAdmin]);
+
+  // ── Mob names for the server ──────────────────────────────────────────────
+  // One cachedGet (60s TTL) per server-select → { mobs:{ "<id>":name } }. Purely
+  // for labelling; failure is silent (falls back to mob_name / #id everywhere).
+  useEffect(() => {
+    if (!isSuperAdmin || !serverId) { setMobNames({}); return undefined; }
+    let alive = true;
+    worldApi.names(serverId)
+      .then((r) => { if (alive) setMobNames(r?.mobs || {}); })
+      .catch(() => { if (alive) setMobNames({}); });
     return () => { alive = false; };
   }, [serverId, isSuperAdmin]);
 
@@ -322,6 +348,7 @@ export default function WorldSessions() {
                                   zoneNo={s.zone_no}
                                   versionId={s.version_id}
                                   onShowOnMap={showOnMap}
+                                  mobLabel={mobLabel}
                                 />
                               )}
                             </Collapse>
@@ -460,7 +487,7 @@ export default function WorldSessions() {
                               </TableCell>
                               <TableCell>
                                 <Typography variant="caption">
-                                  {d.mob_name || (d.mob_id != null ? `#${d.mob_id}` : '—')}
+                                  {mobLabel(d.mob_id, d.mob_name)}
                                 </Typography>
                               </TableCell>
                               <TableCell>
@@ -526,7 +553,7 @@ function ChangeBadge({ change }) {
 // renders per-MOB groups of renewed spots (center, group, hits, reliability) with
 // a per-spot change badge, plus a compact "Changes vs. previous" summary.
 // Own loading / empty / error states, contained inside the expanded row.
-function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
+function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap, mobLabel }) {
   const [detail, setDetail]   = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
@@ -579,7 +606,7 @@ function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
           <Box key={mob.mob_id} sx={{ mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
               <Typography variant="body2" fontWeight={600}>
-                {mob.mob_name || `#${mob.mob_id}`}
+                {mobLabel ? mobLabel(mob.mob_id, mob.mob_name) : (mob.mob_name || `#${mob.mob_id}`)}
               </Typography>
               <Typography variant="caption" color="text.disabled">
                 {mob.spot_count ?? (mob.spots?.length ?? 0)} Spot(s)

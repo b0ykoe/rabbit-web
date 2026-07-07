@@ -7,7 +7,7 @@ import {
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
-import StatusDot from './StatusDot.jsx';
+import AssetStatusIcon from './AssetStatusIcon.jsx';
 
 // A rollup chip for one missing-* count: amber when >0, success "all set" at 0.
 function RollupChip({ label, count }) {
@@ -52,9 +52,10 @@ function useNamesImport(serverId, refetch, showSnackbar) {
 
 // Replaces the old zone-coverage table. A dense, sticky-header matrix over
 // overview.zones with a rollup chip row + "Show only incomplete" filter, and
-// inline fix affordances per cell:
-//   Named      — StatusDot; missing -> triggers whole-server names import.
-//   Spawn data — StatusDot state="inert" when missing (bot-recorded, no upload).
+// inline fix affordances per cell (each cell shows an AssetStatusIcon whose
+// glyph names the asset type + whose color conveys present/missing/inert):
+//   Named      — AssetStatusIcon; missing -> triggers whole-server names import.
+//   Spawn data — AssetStatusIcon actionable={false} when missing (bot-recorded).
 //   Bounds     — missing -> inline importZoneBounds(id, zone, file) upload.
 //   Background — missing -> inline uploadZoneMap(id, zone, file) upload.
 // Both zone uploads refetch()+bumpNonce() so any embedded render cache-busts.
@@ -186,7 +187,7 @@ export default function CoverageMatrix({ server, overview, refetch, bumpNonce, o
                 {/* Named — whole-server import when missing. */}
                 <TableCell align="center">
                   {z.name ? (
-                    <StatusDot state="done" title="Named" />
+                    <AssetStatusIcon kind="named" present actionable />
                   ) : (
                     <Tooltip title="Import names.json / zones.csv (whole server)">
                       <Box
@@ -197,7 +198,7 @@ export default function CoverageMatrix({ server, overview, refetch, bumpNonce, o
                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') names.trigger(); }}
                         sx={{ cursor: 'pointer', display: 'inline-flex' }}
                       >
-                        <StatusDot state="missing" />
+                        <AssetStatusIcon kind="named" present={false} actionable />
                       </Box>
                     </Tooltip>
                   )}
@@ -205,16 +206,13 @@ export default function CoverageMatrix({ server, overview, refetch, bumpNonce, o
 
                 {/* Spawn data — inert when missing (bot-recorded, no upload). */}
                 <TableCell align="center">
-                  <StatusDot
-                    state={z.has_data ? 'done' : 'inert'}
-                    title={z.has_data ? 'Spawn data collected' : 'No spawn data yet — recorded by a bot, not uploadable'}
-                  />
+                  <AssetStatusIcon kind="data" present={!!z.has_data} actionable={false} />
                 </TableCell>
 
                 {/* Bounds — inline importZoneBounds upload when missing. */}
                 <TableCell align="center">
                   {z.has_bounds ? (
-                    <StatusDot state="done" title="Bounds set" />
+                    <AssetStatusIcon kind="bounds" present actionable />
                   ) : (
                     <Tooltip title="Import zone_<N>_calib.json to set bounds">
                       <IconButton
@@ -222,7 +220,7 @@ export default function CoverageMatrix({ server, overview, refetch, bumpNonce, o
                         size="small"
                         color="warning"
                       >
-                        <StatusDot state="missing" size={16} />
+                        <AssetStatusIcon kind="bounds" present={false} actionable size={16} />
                         <input
                           type="file"
                           accept=".json"
@@ -237,7 +235,7 @@ export default function CoverageMatrix({ server, overview, refetch, bumpNonce, o
                 {/* Background — inline uploadZoneMap upload when missing. */}
                 <TableCell align="center">
                   {z.has_background ? (
-                    <StatusDot state="done" title="Background uploaded" />
+                    <AssetStatusIcon kind="background" present actionable />
                   ) : (
                     <Tooltip title="Upload a zone map image (SVG / PNG)">
                       <IconButton

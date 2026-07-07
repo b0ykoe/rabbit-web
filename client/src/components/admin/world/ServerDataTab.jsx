@@ -4,14 +4,35 @@ import {
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Skeleton,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
-import StatusDot from './StatusDot.jsx';
+import AssetStatusIcon from './AssetStatusIcon.jsx';
 
 const SUB_TABS = ['Monsters', 'NPCs', 'Zones'];
+
+// "min-max" (single value when equal), "—" when both null. Used for the mob
+// catalog's level and maxhp ranges.
+function fmtRange(min, max) {
+  if (min == null && max == null) return '—';
+  if (min == null) return String(max);
+  if (max == null) return String(min);
+  return min === max ? String(min) : `${min}-${max}`;
+}
+
+// Relative "time ago" from epoch seconds (mob_catalog.last_seen). "—" when null.
+function timeAgo(sec) {
+  if (!sec) return '—';
+  const diff = Math.floor(Date.now() / 1000) - sec;
+  if (diff < 0) return 'just now';
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`;
+  return new Date(sec * 1000).toLocaleDateString();
+}
 
 // A searchable, sticky-header table shell used by every sub-tab. `columns` is
 // [{ key, label, align?, render? }]; `filter(row, needle)` narrows by the search
 // box; empty/loading states are handled here.
-function DataTable({ rows, columns, filter, placeholder, loading, emptyLabel }) {
+function DataTable({ rows, columns, filter, placeholder, loading, emptyLabel, rowSx }) {
   const [q, setQ] = useState('');
 
   const filtered = useMemo(() => {
@@ -47,7 +68,7 @@ function DataTable({ rows, columns, filter, placeholder, loading, emptyLabel }) 
           </TableHead>
           <TableBody>
             {filtered.map((r, i) => (
-              <TableRow key={r._key ?? i} hover>
+              <TableRow key={r._key ?? i} hover sx={rowSx ? rowSx(r) : undefined}>
                 {columns.map((c) => (
                   <TableCell key={c.key} align={c.align || 'left'}>
                     {c.render ? c.render(r) : r[c.key]}
@@ -91,7 +112,9 @@ export default function ServerDataTab({ overview, loading }) {
         ))}
       </Tabs>
 
-      {/* Monsters — [mob_id, name] */}
+      {/* Monsters — [mob_id, name, level, maxhp, sightings, last_seen] (UNION of
+          curated mob_names + observed mob_catalog). Seen-but-unnamed rows (no
+          curated name) render an italic "unnamed" marker. */}
       {sub === 0 && (
         <DataTable
           rows={mobs}
@@ -99,12 +122,29 @@ export default function ServerDataTab({ overview, loading }) {
           placeholder="Search monsters by name or id…"
           emptyLabel="No monsters recorded for this server."
           filter={(r, n) => String(r.mob_id).includes(n) || (r.name || '').toLowerCase().includes(n)}
+          // Subtle italic marker for seen-but-unnamed rows (observed by a bot but
+          // carrying no curated mob_names name).
+          rowSx={(r) => (r.name == null && r.last_seen != null ? { fontStyle: 'italic' } : undefined)}
           columns={[
             { key: 'mob_id', label: 'ID', align: 'right', render: (r) => (
               <Box component="span" sx={{ fontFamily: 'monospace' }}>{r.mob_id}</Box>
             ) },
             { key: 'name', label: 'Name', render: (r) => r.name || (
               <Box component="span" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>unnamed</Box>
+            ) },
+            { key: 'level', label: 'Level', align: 'right', render: (r) => (
+              <Box component="span" sx={{ fontFamily: 'monospace' }}>{fmtRange(r.level_min, r.level_max)}</Box>
+            ) },
+            { key: 'maxhp', label: 'MaxHP', align: 'right', render: (r) => (
+              <Box component="span" sx={{ fontFamily: 'monospace' }}>{fmtRange(r.maxhp_min, r.maxhp_max)}</Box>
+            ) },
+            { key: 'sightings_total', label: 'Sightings', align: 'right', render: (r) => (
+              r.sightings_total == null
+                ? <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>
+                : <Box component="span" sx={{ fontFamily: 'monospace' }}>{r.sightings_total}</Box>
+            ) },
+            { key: 'last_seen', label: 'Seen', align: 'right', render: (r) => (
+              <Box component="span" sx={{ color: 'text.disabled' }}>{timeAgo(r.last_seen)}</Box>
             ) },
           ]}
         />
@@ -154,13 +194,13 @@ export default function ServerDataTab({ overview, loading }) {
               </Box>
             ) },
             { key: 'has_data', label: 'Spawn data', align: 'center', render: (r) => (
-              <StatusDot state={r.has_data ? 'done' : 'inert'} title={r.has_data ? 'Spawn data collected' : 'No spawn data yet'} size={16} />
+              <AssetStatusIcon kind="data" present={!!r.has_data} actionable={false} size={16} />
             ) },
             { key: 'has_bounds', label: 'Bounds', align: 'center', render: (r) => (
-              <StatusDot state={r.has_bounds ? 'done' : 'missing'} title={r.has_bounds ? 'Bounds set' : 'No bounds'} size={16} />
+              <AssetStatusIcon kind="bounds" present={!!r.has_bounds} actionable size={16} />
             ) },
             { key: 'has_background', label: 'Background', align: 'center', render: (r) => (
-              <StatusDot state={r.has_background ? 'done' : 'missing'} title={r.has_background ? 'Background uploaded' : 'No background'} size={16} />
+              <AssetStatusIcon kind="background" present={!!r.has_background} actionable size={16} />
             ) },
           ]}
         />
