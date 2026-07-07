@@ -8,6 +8,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { adminApi } from '../../../api/endpoints.js';
 import ServerTabs, { SERVER_TABS } from './ServerTabs.jsx';
 import ServerSettingsTab from './ServerSettingsTab.jsx';
+import ServerOverviewTab from './ServerOverviewTab.jsx';
+import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
 const DEFAULT_TAB = 'overview';
@@ -82,7 +84,12 @@ export default function WorldServerDetailPage() {
         return <StubPanel {...tabProps} label="Reference tables (monsters / NPCs / zones) land in a later phase." />;
       case 'overview':
       default:
-        return <StubPanel {...tabProps} label="Coverage & what's-missing lands in P2." />;
+        return (
+          <ServerOverviewTab
+            {...tabProps}
+            onOpenTab={(t) => navigate(`/admin/world/servers/${id}/${t}`)}
+          />
+        );
     }
   };
 
@@ -164,6 +171,7 @@ export default function WorldServerDetailPage() {
               color={server?.visible ? 'success' : 'default'}
               variant={server?.visible ? 'filled' : 'outlined'}
             />
+            <CoverageStatusPill server={server} />
             {(server?.known_ips || []).map((ip) => (
               <Chip
                 key={ip} label={ip} size="small" variant="outlined"

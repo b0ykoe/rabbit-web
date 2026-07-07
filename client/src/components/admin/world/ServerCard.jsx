@@ -9,6 +9,7 @@ import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import ExportCsvMenu from './ExportCsvMenu.jsx';
+import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 // Relative "time ago" for the last_seen footer. Server sends epoch seconds.
 const fmtRelative = (sec) => {
@@ -23,14 +24,15 @@ const fmtRelative = (sec) => {
 };
 
 // A small labelled pill for the coverage strip. `value` null/undefined renders a
-// neutral "—" placeholder (used for counts a later phase + backend will add).
-function CoveragePill({ label, value }) {
+// neutral "—" placeholder. `color` overrides the default primary tint so the
+// per-zone coverage pills (Bounds / Backgrounds) can go green/amber/grey.
+function CoveragePill({ label, value, color }) {
   const placeholder = value === null || value === undefined;
   return (
     <Chip
       size="small"
       variant="outlined"
-      color={placeholder ? 'default' : 'primary'}
+      color={color || (placeholder ? 'default' : 'primary')}
       label={
         <Box component="span" sx={{ display: 'inline-flex', gap: 0.5, alignItems: 'baseline' }}>
           <Box component="span" sx={{ fontSize: '0.65rem', opacity: 0.75 }}>{label}</Box>
@@ -41,6 +43,14 @@ function CoveragePill({ label, value }) {
     />
   );
 }
+
+// Green when the numerator equals a positive denominator (fully covered), amber
+// when partially covered, grey when there is nothing yet (0/0 or no data zones).
+const coverageColor = (have, total) => {
+  if (!total) return 'default';
+  if (have >= total) return 'success';
+  return 'warning';
+};
 
 // One server as a card in the WorldServersPage grid. The card body is a big
 // CardActionArea that navigates into the server's detail route; a MoreVert
@@ -91,6 +101,11 @@ export default function ServerCard({ server, onChanged }) {
   const mobCount = server.mob_count ?? 0;
   const cellCount = server.cell_count ?? 0;
 
+  // Per-zone coverage (B1): distinct data-zones vs. those with bounds/backgrounds.
+  const zData       = server.zones_with_data ?? 0;
+  const zBounds     = server.zones_with_bounds ?? 0;
+  const zBackground = server.zones_with_background ?? 0;
+
   return (
     <Card variant="outlined" sx={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Visibility chip — kept OUTSIDE the CardActionArea: an interactive control
@@ -123,13 +138,18 @@ export default function ServerCard({ server, onChanged }) {
             />
           </Box>
 
-          {/* Coverage strip — for P0 only what GET /servers returns; Bounds &
-              Backgrounds are neutral placeholders a later phase fills in. */}
+          {/* Coverage strip — GET /servers counts + the B1 per-zone rollups. The
+              Bounds/Backgrounds pills tint by how many data-zones are covered. */}
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1.5 }}>
             <CoveragePill label={`Names z/mob/npc`} value={`${zNamed}/${mNamed}/${nNamed}`} />
             <CoveragePill label="Data mob/cell" value={`${mobCount}/${cellCount}`} />
-            <CoveragePill label="Bounds" value={null} />
-            <CoveragePill label="Backgrounds" value={null} />
+            <CoveragePill label="Bounds" value={`${zBounds}/${zData}`} color={coverageColor(zBounds, zData)} />
+            <CoveragePill label="Backgrounds" value={`${zBackground}/${zData}`} color={coverageColor(zBackground, zData)} />
+          </Box>
+
+          {/* At-a-glance setup status (computed from the row alone). */}
+          <Box sx={{ mt: 1 }}>
+            <CoverageStatusPill server={server} />
           </Box>
         </CardContent>
       </CardActionArea>

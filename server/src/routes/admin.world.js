@@ -347,7 +347,14 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     // known_ips (034) lists the game socket IPs registered for each server.
     // zone_named_count / mob_named_count (035) + npc_named_count (036) count the
     // REFERENCE name rows so the admin sees how complete the name lists are.
-    const [mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts, npcNameCounts] = await Promise.all([
+    // zones_with_data / zones_with_bounds / zones_with_background (P2 B1) count
+    // DISTINCT zones carrying each per-zone signal (spawn cells / framed bounds /
+    // background images), so the card + detail coverage pills can show
+    // "N/M zones framed / backed" without a per-server drill-in.
+    const [
+      mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts, npcNameCounts,
+      dataZoneCounts, boundsZoneCounts, bgZoneCounts,
+    ] = await Promise.all([
       db('mob_catalog').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as mob_count')),
@@ -370,12 +377,24 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       db('game_npcs').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as npc_named_count')),
+      db('mob_spawn_cells').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(DISTINCT `zone_no`) as zones_with_data')),
+      db('zone_bounds').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(DISTINCT `zone_no`) as zones_with_bounds')),
+      db('zone_maps').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(DISTINCT `zone_no`) as zones_with_background')),
     ]);
     const mobMap  = Object.fromEntries(mobCounts.map(c => [c.server_id, Number(c.mob_count)]));
     const cellMap = Object.fromEntries(cellCounts.map(c => [c.server_id, c]));
     const zoneNameMap = Object.fromEntries(zoneNameCounts.map(c => [c.server_id, Number(c.zone_named_count)]));
     const mobNameMap  = Object.fromEntries(mobNameCounts.map(c => [c.server_id, Number(c.mob_named_count)]));
     const npcNameMap  = Object.fromEntries(npcNameCounts.map(c => [c.server_id, Number(c.npc_named_count)]));
+    const dataZoneMap   = Object.fromEntries(dataZoneCounts.map(c => [c.server_id, Number(c.zones_with_data)]));
+    const boundsZoneMap = Object.fromEntries(boundsZoneCounts.map(c => [c.server_id, Number(c.zones_with_bounds)]));
+    const bgZoneMap     = Object.fromEntries(bgZoneCounts.map(c => [c.server_id, Number(c.zones_with_background)]));
     const ipsMap  = new Map();
     for (const h of hostRows) {
       if (!ipsMap.has(h.server_id)) ipsMap.set(h.server_id, []);
@@ -390,6 +409,9 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       s.zone_named_count  = zoneNameMap[s.id] || 0;
       s.mob_named_count   = mobNameMap[s.id]  || 0;
       s.npc_named_count   = npcNameMap[s.id]  || 0;
+      s.zones_with_data       = dataZoneMap[s.id]   || 0;
+      s.zones_with_bounds     = boundsZoneMap[s.id] || 0;
+      s.zones_with_background = bgZoneMap[s.id]      || 0;
       s.known_ips         = ipsMap.get(s.id) || [];
     }
   }
