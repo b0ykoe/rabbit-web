@@ -23,14 +23,42 @@
 // index.js, matching how every other bot limiter is wired.
 //
 
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import db from '../db.js';
 import { validateSpawnIngest } from '../middleware/spawnIngest.js';
-import { validate, spawnIngestSchema, zoneBoundsSchema } from '../validation/schemas.js';
+import {
+  validate, spawnIngestSchema, zoneBoundsSchema,
+  sessionStartSchema, sessionStopSchema,
+} from '../validation/schemas.js';
 
 const router = Router();
 
 function nowSec() { return Math.floor(Date.now() / 1000); }
+
+// Stale 'running' sessions older than this (seconds) are lazily flipped to
+// 'expired' when they are read — a bot that died without POSTing /session/stop
+// (crash, kill) doesn't leave a session 'running' forever. 12h.
+const SESSION_STALE_SEC = 12 * 60 * 60;
+
+// LAZY EXPIRY. Called on the read paths (session load). If the row is still
+// 'running' but older than SESSION_STALE_SEC, flip it to 'expired' in place and
+// return the mutated view so the caller sees the effective status. Cheap +
+// best-effort — a concurrent stop simply wins the last write.
+async function lazyExpireSession(row) {
+  if (!row) return row;
+  if (row.status === 'running') {
+    const now = nowSec();
+    if (now - Number(row.started_sec) > SESSION_STALE_SEC) {
+      await db('scan_sessions')
+        .where('session_id', row.session_id)
+        .andWhere('status', 'running')
+        .update({ status: 'expired', ended_sec: now, updated_at: now });
+      return { ...row, status: 'expired', ended_sec: now, updated_at: now };
+    }
+  }
+  return row;
+}
 
 // ── Auth-context resolution ──────────────────────────────────────────────────
 // Mirrors bot.config.js:resolveUserId exactly — accepts session tokens
@@ -110,9 +138,25 @@ router.post('/spawns',
     const userId = await requireSpawnTracking(req, res);
     if (userId == null) return;
 
-    const { server, zone_no, sightings } = req.validated;
+    const { server, zone_no, sightings, session_id } = req.validated;
     const now = nowSec();
     const serverId = await upsertGameServer(server);
+
+    // ── Resolve the effective session_id (null-tolerant) ────────────────────
+    // A batch may carry a backend session_id (033). We stamp it on the
+    // spawn_version_meta INSERT (first-writer-wins) ONLY when the session both
+    // exists AND is owned by the resolving user. A missing/foreign/stale
+    // session_id is DROPPED (effSessionId = null) — ingest never hard-rejects
+    // on it, matching the additive/back-compat contract. Lazy-expiry runs on
+    // the read but does NOT gate the stamp (an expired-but-owned session still
+    // attributes its already-in-flight deltas).
+    let effSessionId = null;
+    if (session_id) {
+      const sess = await lazyExpireSession(
+        await db('scan_sessions').where('session_id', session_id).first(),
+      );
+      if (sess && sess.user_id === userId) effSessionId = session_id;
+    }
 
     // Intra-batch dedup by netid within a (channel, cell, mob) so a single
     // batch that saw the same live instance twice counts it once. netid is
@@ -381,6 +425,12 @@ router.post('/spawns',
             // (first-writer-wins). A NULL userId (shouldn't happen past the gate)
             // simply leaves the slot NULL.
             user_id:       userId ?? null,
+            // Backend session back-reference (033). Same first-writer-wins
+            // discipline as user_id: stamped on INSERT ONLY (omitted from the
+            // .merge() below), so the FIRST writer of a (server,zone,version)
+            // owns the session slot. null when the batch carried no owned/valid
+            // session_id.
+            session_id:    effSessionId,
           })
           .onConflict(['server_id', 'zone_no', 'version_id'])
           .merge({
@@ -444,6 +494,104 @@ router.post('/zone-bounds',
       });
 
     res.json({ ok: true, server_id: serverId, zone_no: b.zone_no });
+  });
+
+// ── POST /session/start ──────────────────────────────────────────────────────
+// Open a backend recording session. Same guards as /spawns (auth BEFORE body
+// parse → schema → spawn_tracking gate → resolved userId). The portal mints the
+// session_id (crypto.randomUUID) so the bot never has to; the bot rides it
+// alongside run_id on subsequent /spawns uploads. server{}/zone_no/run_id are
+// all optional (a Debug-with-key start may not know the server yet).
+router.post('/session/start',
+  validateSpawnIngest,
+  validate(sessionStartSchema),
+  async (req, res) => {
+    const userId = await requireSpawnTracking(req, res);
+    if (userId == null) return;
+
+    const { server, zone_no, run_id } = req.validated;
+    const now = nowSec();
+
+    // Snapshot the server if the bot knew it; else leave server_id/ip/variant NULL.
+    let serverId = null;
+    let ip = null;
+    let variant = null;
+    if (server) {
+      serverId = await upsertGameServer(server);
+      ip = server.ip;
+      variant = server.variant;
+    }
+
+    const sessionId = crypto.randomUUID();
+    await db('scan_sessions').insert({
+      session_id:  sessionId,
+      user_id:     userId ?? null,
+      server_id:   serverId,
+      ip,
+      variant,
+      // run_id carried as a string for the bigint column (JSON can't hold a bigint).
+      run_id:      run_id != null ? String(run_id) : null,
+      zone_no:     zone_no ?? null,
+      status:      'running',
+      started_sec: now,
+      ended_sec:   null,
+      updated_at:  now,
+    });
+
+    res.json({ ok: true, session_id: sessionId, started_sec: now });
+  });
+
+// ── POST /session/stop ───────────────────────────────────────────────────────
+// Close a recording session by its uuid. 404 on unknown. Ownership guard:
+// row.user_id === userId, with a super_admin bypass (super_admin may stop any
+// session). ended_sec is server-clamped to [started, now]. Idempotent: a session
+// already stopped/expired returns ok with its existing ended_sec unchanged.
+router.post('/session/stop',
+  validateSpawnIngest,
+  validate(sessionStopSchema),
+  async (req, res) => {
+    const userId = await requireSpawnTracking(req, res);
+    if (userId == null) return;
+
+    const { session_id, ended_sec } = req.validated;
+
+    // Lazy-expire on read so a stale 'running' row reports correctly even here.
+    let row = await lazyExpireSession(
+      await db('scan_sessions').where('session_id', session_id).first(),
+    );
+    if (!row) {
+      res.status(404).json({ error: 'Unknown session' });
+      return;
+    }
+
+    // Ownership: the recording user, OR a super_admin (may stop ANY session).
+    const actor = await db('users').where('id', userId).select('role').first();
+    const isSuperAdmin = actor?.role === 'super_admin';
+    if (!isSuperAdmin && row.user_id !== userId) {
+      res.status(403).json({ error: 'Not your session' });
+      return;
+    }
+
+    const now = nowSec();
+
+    // Idempotent: already-closed sessions return their existing ended_sec.
+    if (row.status !== 'running') {
+      res.json({ ok: true, session_id: row.session_id, ended_sec: row.ended_sec });
+      return;
+    }
+
+    // Clamp the requested end into [started_sec, now]; default to now.
+    const started = Number(row.started_sec);
+    let ended = ended_sec != null ? ended_sec : now;
+    if (ended < started) ended = started;
+    if (ended > now)     ended = now;
+
+    await db('scan_sessions')
+      .where('session_id', session_id)
+      .andWhere('status', 'running')
+      .update({ status: 'stopped', ended_sec: ended, updated_at: now });
+
+    res.json({ ok: true, session_id, ended_sec: ended });
   });
 
 export default router;

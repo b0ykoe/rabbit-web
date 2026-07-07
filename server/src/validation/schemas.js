@@ -197,6 +197,42 @@ export const spawnIngestSchema = z.object({
   }),
   zone_no:   z.number().int().min(0).max(65535),
   sightings: z.array(spawnSightingSchema).min(1).max(200),
+  // Backend-issued recording session (033). When present + valid + owned, every
+  // cell in this batch is attributed to it (stamped on spawn_version_meta INSERT
+  // only). null-tolerant in the route: a bad/foreign session_id is dropped, not
+  // rejected, so ingest never fails on a stale session. Absent for legacy bots.
+  session_id: z.string().uuid().optional(),
+});
+
+// ── Bot: Recording sessions (world) ──────────────────────────────────────────
+// Backend-issued scan sessions (033). session_id rides ALONGSIDE run_id (run_id
+// stays the version bucket); the portal mints the uuid so the bot never has to.
+//
+//   POST /session/start — open a 'running' session. server{}/zone_no/run_id are
+//     all optional (the bot may not know the server yet, and a Debug-with-key
+//     start still wants a session). client_started_sec is informational; the
+//     server always stamps its own started_sec.
+//   POST /session/stop  — close a session by its (required) uuid. ended_sec is
+//     optional + server-clamped to [started, now].
+export const sessionStartSchema = z.object({
+  token:  z.string().optional(),                   // consumed by validateSpawnIngest, ignored here
+  server: z.object({
+    ip:      z.string().min(1).max(45),
+    variant: z.string().min(1).max(32),
+    port:    z.string().max(8).optional(),
+  }).optional(),
+  zone_no: z.number().int().min(0).max(65535).optional(),
+  // run_id may arrive as a JS number or a bigint-as-string (JSON can't hold a
+  // bigint) — same contract as spawnSightingSchema.run_id.
+  run_id:  z.union([z.number().int().nonnegative(), z.string().regex(/^\d+$/)]).optional(),
+  // Bot's own clock at start; informational only — server stamps started_sec.
+  client_started_sec: z.number().int().nonnegative().optional(),
+});
+
+export const sessionStopSchema = z.object({
+  token:      z.string().optional(),
+  session_id: z.string().uuid(),                   // required — the session to close
+  ended_sec:  z.number().int().nonnegative().optional(),
 });
 
 export const zoneBoundsSchema = z.object({
