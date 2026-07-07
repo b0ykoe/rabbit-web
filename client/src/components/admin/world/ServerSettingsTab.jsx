@@ -11,6 +11,7 @@ import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import { VARIANT_OPTIONS } from './CreateServerDialog.jsx';
 import KnownIpsEditor from './KnownIpsEditor.jsx';
+import MergeServerDialog from './MergeServerDialog.jsx';
 
 // Sentinel Select value that reveals the free-text variant field. Variant is free
 // text on the server (VARCHAR 32); the curated VARIANT_OPTIONS is just a shortlist.
@@ -63,6 +64,25 @@ export default function ServerSettingsTab({ server, onChanged }) {
   // ── Danger zone ────────────────────────────────────────────────────────────
   const [confirmDel, setConfirmDel] = useState(false);
   const [deleting, setDeleting]     = useState(false);
+
+  // ── Merge (fold another server into this one) ──────────────────────────────
+  const [mergeOpen, setMergeOpen]   = useState(false);
+  const [mergeServers, setMergeServers] = useState([]); // source-picker options
+  const [mergeLoading, setMergeLoading] = useState(false);
+
+  // Load the server list (source-picker options) when the merge dialog opens.
+  const openMerge = async () => {
+    setMergeOpen(true);
+    setMergeLoading(true);
+    try {
+      const res = await adminApi.getWorldServers();
+      setMergeServers(res?.data || []);
+    } catch (err) {
+      showSnackbar(errMsg(err, 'Failed to load servers'), 'error');
+    } finally {
+      setMergeLoading(false);
+    }
+  };
 
   // Re-seed local fields whenever the underlying server row changes (e.g. refetch
   // after a save, or navigating between servers without unmounting).
@@ -263,9 +283,11 @@ export default function ServerSettingsTab({ server, onChanged }) {
           Irreversible and destructive actions.
         </Typography>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
-          <Tooltip title="Coming soon">
+          <Tooltip title="Fold another server's data into this one, then delete it">
             <span>
-              <Button variant="outlined" disabled>Merge another server in…</Button>
+              <Button variant="outlined" onClick={openMerge} disabled={mergeLoading && mergeOpen}>
+                Merge another server in…
+              </Button>
             </span>
           </Tooltip>
           <Divider flexItem orientation="vertical" sx={{ display: { xs: 'none', sm: 'block' } }} />
@@ -274,6 +296,22 @@ export default function ServerSettingsTab({ server, onChanged }) {
           </Button>
         </Stack>
       </Paper>
+
+      {/* Merge dialog — folds a chosen SOURCE server into THIS one (the target),
+          then deletes the source. onMerged: the source is gone, so we stay on the
+          target and refetch — never navigate away. */}
+      <MergeServerDialog
+        open={mergeOpen}
+        onClose={() => setMergeOpen(false)}
+        targetServer={server}
+        servers={mergeServers}
+        onMerged={() => {
+          // The dialog already fired the "Merged X into Y" snackbar; just refetch.
+          // The merged-away source is gone — staying on this target is correct.
+          setMergeOpen(false);
+          onChanged?.();
+        }}
+      />
 
       {/* Delete confirmation — mirrors ServerCard's copy. */}
       <Dialog open={confirmDel} onClose={() => !deleting && setConfirmDel(false)}>

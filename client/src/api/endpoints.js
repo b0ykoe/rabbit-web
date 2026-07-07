@@ -83,6 +83,13 @@ export const adminApi = {
   updateWorldServer: (id, data)  => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}`, { method: 'PATCH',  body: JSON.stringify(data) }),
   deleteWorldServer: (id)        => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
+  // Fold one server (source) INTO another (target=id). Re-points every child table
+  // of the source onto the target then deletes the source row — destructive, in one
+  // transaction. body { source_id, dry_run? }: dry_run:true returns the per-table
+  // "moved" counts WITHOUT mutating; dry_run:false performs the merge and returns
+  // { ok, target_id, source_id, moved:{…} }.
+  mergeWorldServer:  (id, body)  => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/merge`, { method: 'POST', body: JSON.stringify(body) }),
+
   // Per-(server,zone) background map images (super-admin) — additive.
   // Lists every data-zone for a server with its background status; upload/delete a
   // single SVG/PNG per (server, zone). Upload is multipart: reuse the Releases

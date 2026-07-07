@@ -11,21 +11,11 @@ import ServerSettingsTab from './ServerSettingsTab.jsx';
 import ServerOverviewTab from './ServerOverviewTab.jsx';
 import UploadsTab from './UploadsTab.jsx';
 import MapTab from './MapTab.jsx';
+import ServerDataTab from './ServerDataTab.jsx';
 import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
 const DEFAULT_TAB = 'overview';
-
-// A neutral placeholder body for tabs that land in later phases. Accepts (and
-// ignores) the shared tab props so P2–P4 can swap it 1:1 for a real component that
-// consumes { server, overview, loading, refetch, nonce, bumpNonce }.
-function StubPanel({ label }) { // eslint-disable-line no-unused-vars
-  return (
-    <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
-      <Typography variant="body2" color="text.secondary">{label}</Typography>
-    </Paper>
-  );
-}
 
 // The per-server detail shell (P1). Resolves :id + :tab, loads the server ROW (from
 // the admin list — there is no GET /servers/:id) plus its coverage overview, renders
@@ -96,7 +86,7 @@ export default function WorldServerDetailPage() {
       case 'uploads':
         return <UploadsTab {...tabProps} onOpenTab={openTab} />;
       case 'data':
-        return <StubPanel {...tabProps} label="Reference tables (monsters / NPCs / zones) land in a later phase." />;
+        return <ServerDataTab {...tabProps} />;
       case 'overview':
       default:
         return <ServerOverviewTab {...tabProps} onOpenTab={openTab} />;

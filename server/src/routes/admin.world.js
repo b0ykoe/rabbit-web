@@ -26,7 +26,7 @@ import { signToken, generateJti } from '../crypto/ed25519.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
-import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema } from '../validation/schemas.js';
+import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema, serverMergeSchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -567,6 +567,10 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
     c.game_npcs               = await trx('game_npcs').where('server_id', id).del();
     // 034: also purge the server's registered host IPs.
     c.game_server_hosts       = await trx('game_server_hosts').where('server_id', id).del();
+    // 031/033: the zone background-map rows + recording sessions are per-server too
+    // (parity with the merge re-point set — otherwise these rows leak on delete).
+    c.zone_maps               = await trx('zone_maps').where('server_id', id).del();
+    c.scan_sessions           = await trx('scan_sessions').where('server_id', id).del();
     c.game_servers            = await trx('game_servers').where('id', id).del();
     return c;
   });
@@ -578,6 +582,254 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
   });
 
   res.json({ deleted: true, counts });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MERGE — fold one server (source) INTO another (target/survivor). Super-admin +
+// audited. :id is the TARGET survivor; body { source_id, dry_run? }. This reuses
+// the battle-tested per-variant fold from migration 034_named_servers.js, adapted
+// from (survivor = MIN(id) per variant) to a single explicit (survivor=:id,
+// src=source_id) pair. Post-034 every row is channel 0, but we KEEP 034's exact
+// derived-table shapes verbatim (channel pinned 0 + GROUP BY the key) so the
+// merge stays replication-safe and collapses any incidental collisions.
+//
+// The child-table set MUST match the DELETE /servers/:id cascade above — that is
+// the authoritative "what references a server" list (game_zones / mob_names /
+// game_npcs are in it too). Runs in ONE knex.transaction with DML ONLY (no DDL),
+// so there is no #805 mixed-transaction-and-DDL issue.
+//
+//   ADDITIVE heat (collision-merge, mirrors 034 foldChild/foldFlatChild):
+//     mob_spawn_cells, mob_spawn_cell_versions, mob_catalog, spawn_version_meta.
+//   SURVIVOR-WINS assets (keep the target row on collision):
+//     zone_bounds, zone_maps, game_zones, mob_names, game_npcs.
+//   game_server_hosts: UPDATE IGNORE (unique ip) then delete leftovers.
+//   scan_sessions: plain re-point.
+//   finally DELETE the source game_servers row.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The child tables whose SOURCE rows move onto the target, in the same
+// cascade order as DELETE /servers/:id. Used for the dry-run per-table counts.
+const MERGE_CHILD_TABLES = [
+  'mob_catalog', 'mob_spawn_cells', 'mob_spawn_cell_versions', 'spawn_version_meta',
+  'zone_bounds', 'zone_maps', 'game_zones', 'mob_names', 'game_npcs',
+  'game_server_hosts', 'scan_sessions',
+];
+
+// ADDITIVE channelled heat — mirrors 034 CELLS / CELL_VERSIONS. channel pinned 0,
+// GROUP BY the key cols, additive/widening ON DUPLICATE KEY UPDATE, then delete
+// the source rows. keyCols = surviving-PK columns after server_id/channel pinned.
+const MERGE_CELLS = {
+  cols: 'y_avg, hits, passes, instance_sum, last_hit_run_id, last_pass_run_id, first_seen_sec, last_seen_sec',
+  exprs:
+    'MAX(y_avg), SUM(hits), SUM(passes), SUM(instance_sum), ' +
+    'MAX(last_hit_run_id), MAX(last_pass_run_id), MIN(first_seen_sec), MAX(last_seen_sec)',
+  onDup:
+    'hits = hits + VALUES(hits), passes = passes + VALUES(passes), ' +
+    'instance_sum = instance_sum + VALUES(instance_sum), ' +
+    'last_hit_run_id = GREATEST(last_hit_run_id, VALUES(last_hit_run_id)), ' +
+    'last_pass_run_id = GREATEST(last_pass_run_id, VALUES(last_pass_run_id)), ' +
+    'first_seen_sec = LEAST(first_seen_sec, VALUES(first_seen_sec)), ' +
+    'last_seen_sec = GREATEST(last_seen_sec, VALUES(last_seen_sec)), ' +
+    'y_avg = COALESCE(VALUES(y_avg), y_avg)',
+  keyCols: ['zone_no', 'mob_id', 'cell_x', 'cell_z'],
+};
+const MERGE_CELL_VERSIONS = {
+  cols: 'hits, passes, instance_sum, last_hit_run_id, last_pass_run_id, y_avg, first_seen_sec, last_seen_sec',
+  exprs:
+    'SUM(hits), SUM(passes), SUM(instance_sum), ' +
+    'MAX(last_hit_run_id), MAX(last_pass_run_id), MAX(y_avg), ' +
+    'MIN(first_seen_sec), MAX(last_seen_sec)',
+  onDup:
+    'hits = hits + VALUES(hits), passes = passes + VALUES(passes), ' +
+    'instance_sum = instance_sum + VALUES(instance_sum), ' +
+    'last_hit_run_id = GREATEST(last_hit_run_id, VALUES(last_hit_run_id)), ' +
+    'last_pass_run_id = GREATEST(last_pass_run_id, VALUES(last_pass_run_id)), ' +
+    'y_avg = COALESCE(VALUES(y_avg), y_avg), ' +
+    'first_seen_sec = LEAST(first_seen_sec, VALUES(first_seen_sec)), ' +
+    'last_seen_sec = GREATEST(last_seen_sec, VALUES(last_seen_sec))',
+  keyCols: ['zone_no', 'mob_id', 'cell_x', 'cell_z', 'version_id'],
+};
+
+// Additive channelled fold for a single (survivorId, srcId). Same derived-table
+// shape as 034 foldChild: SELECT the re-pointed rows onto the survivor at channel
+// 0, GROUP BY the key, ON DUPLICATE KEY UPDATE additive, then delete the source.
+async function mergeFoldChild(trx, table, survivorId, srcId, spec) {
+  const keyList = spec.keyCols.join(', ');
+  const groupBy = spec.keyCols.join(', ');
+  await trx.raw(
+    `INSERT INTO \`${table}\` (server_id, ${keyList}, channel, ${spec.cols})
+       SELECT * FROM (
+         SELECT ?, ${keyList}, 0 AS channel, ${spec.exprs}
+           FROM \`${table}\`
+          WHERE server_id = ?
+          GROUP BY ${groupBy}
+       ) AS dt
+     ON DUPLICATE KEY UPDATE ${spec.onDup}`,
+    [survivorId, srcId],
+  );
+  await trx.raw(`DELETE FROM \`${table}\` WHERE server_id = ?`, [srcId]);
+}
+
+// Additive channel-less fold for a single (survivorId, srcId). Mirrors 034
+// foldFlatChild: straight re-point with a widening/additive merge.
+async function mergeFoldFlatChild(trx, table, survivorId, srcId, keyCols, cols, exprs, onDup) {
+  const keyList = keyCols.join(', ');
+  const groupBy = keyCols.join(', ');
+  await trx.raw(
+    `INSERT INTO \`${table}\` (server_id, ${keyList}, ${cols})
+       SELECT * FROM (
+         SELECT ?, ${keyList}, ${exprs}
+           FROM \`${table}\`
+          WHERE server_id = ?
+          GROUP BY ${groupBy}
+       ) AS dt
+     ON DUPLICATE KEY UPDATE ${onDup}`,
+    [survivorId, srcId],
+  );
+  await trx.raw(`DELETE FROM \`${table}\` WHERE server_id = ?`, [srcId]);
+}
+
+// Survivor-wins re-point for a channel-less asset table. Mirrors 034's inline
+// zone_bounds/zone_maps INSERT..SELECT wrapped in a derived table, ON DUPLICATE
+// KEY UPDATE <pk>=<pk> (keep the TARGET row on collision), then delete the source.
+// `allCols` is the FULL non-server_id column list (the PK zone_no/mob_id/npc_id
+// included), and `pk` is a per-zone/mob/npc key column used for the no-op update.
+async function mergeSurvivorWins(trx, table, survivorId, srcId, allCols, pk) {
+  await trx.raw(
+    `INSERT INTO \`${table}\` (server_id, ${allCols})
+       SELECT * FROM (
+         SELECT ?, ${allCols} FROM \`${table}\` WHERE server_id = ?
+       ) AS dt
+     ON DUPLICATE KEY UPDATE ${pk} = \`${table}\`.${pk}`,
+    [survivorId, srcId],
+  );
+  await trx.raw(`DELETE FROM \`${table}\` WHERE server_id = ?`, [srcId]);
+}
+
+// POST /api/admin/world/servers/:id/merge — fold source_id INTO :id (survivor).
+router.post('/servers/:id/merge', requireSuperAdmin, validate(serverMergeSchema), async (req, res) => {
+  const targetId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(targetId) || targetId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+  const { source_id: sourceId, dry_run: dryRun } = req.validated;
+
+  // A server cannot be merged into itself (source_id lives in the body, target in
+  // the URL — the schema can't cross-check them, so guard here).
+  if (sourceId === targetId) {
+    return res.status(400).json({ error: 'cannot merge a server into itself' });
+  }
+
+  // Both servers must exist (404 if either is missing).
+  const [target, source] = await Promise.all([
+    db('game_servers').where('id', targetId).first(),
+    db('game_servers').where('id', sourceId).first(),
+  ]);
+  if (!target) return res.status(404).json({ error: 'Target server not found' });
+  if (!source) return res.status(404).json({ error: 'Source server not found' });
+
+  // Per-child-table count of SOURCE rows (each = COUNT WHERE server_id=source).
+  // Used by BOTH the dry-run preview and the mutating response.
+  async function movedCounts(runner) {
+    const entries = await Promise.all(
+      MERGE_CHILD_TABLES.map(async (table) => {
+        const row = await runner(table).where('server_id', sourceId).count('* as c').first();
+        return [table, Number(row?.c ?? 0)];
+      }),
+    );
+    return Object.fromEntries(entries);
+  }
+
+  // ── DRY-RUN — no writes; report what WOULD move + a source summary. ─────────
+  if (dryRun) {
+    const moved = await movedCounts(db);
+    return res.json({
+      dry_run:   true,
+      target_id: targetId,
+      source_id: sourceId,
+      moved,
+      source: {
+        id:      source.id,
+        name:    source.name,
+        variant: source.variant,
+        counts:  moved,
+      },
+    });
+  }
+
+  // ── APPLY — one transaction, DML ONLY (no DDL → no #805). ───────────────────
+  // Count BEFORE the fold (the mutating response reports what moved); the same
+  // counts drive the audit newValues.
+  const moved = await movedCounts(db);
+
+  await db.transaction(async (trx) => {
+    // Re-point host rows onto the survivor first (ip is UNIQUE table-wide, so a
+    // re-point can only collide with the survivor's own ip — drop that leftover).
+    await trx.raw(
+      `UPDATE IGNORE game_server_hosts SET server_id = ? WHERE server_id = ?`,
+      [targetId, sourceId],
+    );
+    await trx.raw(`DELETE FROM game_server_hosts WHERE server_id = ?`, [sourceId]);
+
+    // ADDITIVE channelled heat.
+    await mergeFoldChild(trx, 'mob_spawn_cells', targetId, sourceId, MERGE_CELLS);
+    await mergeFoldChild(trx, 'mob_spawn_cell_versions', targetId, sourceId, MERGE_CELL_VERSIONS);
+
+    // ADDITIVE channel-less children (mob_catalog / spawn_version_meta) — verbatim
+    // column lists + merge semantics from 034 foldFlatChild.
+    await mergeFoldFlatChild(trx, 'mob_catalog', targetId, sourceId,
+      ['mob_id'],
+      'name, level_min, level_max, maxhp_min, maxhp_max, sightings_total, last_seen',
+      'MAX(name), MIN(level_min), MAX(level_max), MIN(maxhp_min), MAX(maxhp_max), ' +
+        'SUM(sightings_total), MAX(last_seen)',
+      'name = COALESCE(name, VALUES(name)), ' +
+        'level_min = LEAST(COALESCE(level_min, VALUES(level_min)), COALESCE(VALUES(level_min), level_min)), ' +
+        'level_max = GREATEST(COALESCE(level_max, VALUES(level_max)), COALESCE(VALUES(level_max), level_max)), ' +
+        'maxhp_min = LEAST(COALESCE(maxhp_min, VALUES(maxhp_min)), COALESCE(VALUES(maxhp_min), maxhp_min)), ' +
+        'maxhp_max = GREATEST(COALESCE(maxhp_max, VALUES(maxhp_max)), COALESCE(VALUES(maxhp_max), maxhp_max)), ' +
+        'sightings_total = sightings_total + VALUES(sightings_total), ' +
+        'last_seen = GREATEST(last_seen, VALUES(last_seen))');
+
+    await mergeFoldFlatChild(trx, 'spawn_version_meta', targetId, sourceId,
+      ['zone_no', 'version_id'],
+      'ver_start_sec, ver_end_sec, run_count, updated_at, user_id, session_id',
+      'MIN(ver_start_sec), MAX(ver_end_sec), SUM(run_count), MAX(updated_at), ' +
+        'MIN(user_id), MIN(session_id)',
+      'ver_start_sec = LEAST(ver_start_sec, VALUES(ver_start_sec)), ' +
+        'ver_end_sec = GREATEST(ver_end_sec, VALUES(ver_end_sec)), ' +
+        'run_count = run_count + VALUES(run_count), ' +
+        'updated_at = GREATEST(updated_at, VALUES(updated_at)), ' +
+        'user_id = COALESCE(user_id, VALUES(user_id)), ' +
+        'session_id = COALESCE(session_id, VALUES(session_id))');
+
+    // SURVIVOR-WINS assets — keep the target's row on any (server,key) collision.
+    await mergeSurvivorWins(trx, 'zone_bounds', targetId, sourceId,
+      'zone_no, origin_x, origin_z, world_min_x, world_min_z, world_max_x, world_max_z, ' +
+      'size_px, meters_per_pixel, cell_size_m, updated_at', 'zone_no');
+    await mergeSurvivorWins(trx, 'zone_maps', targetId, sourceId,
+      'zone_no, format, file_name, orig_name, content_type, byte_size, width, height, ' +
+      'uploaded_by, uploaded_at', 'zone_no');
+    await mergeSurvivorWins(trx, 'game_zones', targetId, sourceId,
+      'zone_no, name, updated_at', 'zone_no');
+    await mergeSurvivorWins(trx, 'mob_names', targetId, sourceId,
+      'mob_id, name, updated_at', 'mob_id');
+    await mergeSurvivorWins(trx, 'game_npcs', targetId, sourceId,
+      'npc_id, name, type, zone_no, updated_at', 'npc_id');
+
+    // scan_sessions — plain re-point of the informational snapshot rows.
+    await trx.raw(`UPDATE scan_sessions SET server_id = ? WHERE server_id = ?`, [targetId, sourceId]);
+
+    // Finally, delete the drained source server row.
+    await trx.raw(`DELETE FROM game_servers WHERE id = ?`, [sourceId]);
+  });
+
+  await recordAudit(db, req, {
+    action: 'world.server.merge', subjectType: 'game_server', subjectId: String(targetId),
+    oldValues: { source: { id: source.id, name: source.name, variant: source.variant } },
+    newValues: { target: targetId, source: sourceId, moved },
+  });
+
+  res.json({ ok: true, target_id: targetId, source_id: sourceId, moved });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

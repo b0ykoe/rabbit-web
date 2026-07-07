@@ -305,6 +305,17 @@ export const serverUpdateSchema = z.object({
   { message: 'Provide at least one field to update' },
 );
 
+// POST /api/admin/world/servers/:id/merge — FOLD one server (source_id) INTO
+// the target (:id survivor). source_id is required + positive; the route also
+// rejects source_id === :id (400 "cannot merge a server into itself") since
+// :id is a URL param not visible here. dry_run:true returns per-child-table
+// move counts WITHOUT mutating; dry_run:false (default) re-points every child
+// of source_id onto :id and deletes the source game_servers row.
+export const serverMergeSchema = z.object({
+  source_id: z.coerce.number().int().positive(),
+  dry_run:   z.boolean().optional().default(false),
+});
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function validate(schema) {
