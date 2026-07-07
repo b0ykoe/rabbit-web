@@ -33,6 +33,7 @@ import adminSessionsRoutes  from './routes/admin.sessions.js';
 import adminAuditRoutes     from './routes/admin.audit.js';
 import adminStatusesRoutes  from './routes/admin.statuses.js';
 import adminWorldRoutes     from './routes/admin.world.js';
+import adminOffsetsRoutes   from './routes/admin.offsets.js';
 import portalDashboardRoutes from './routes/portal.dashboard.js';
 import portalKeysRoutes     from './routes/portal.keys.js';
 import portalRedeemRoutes   from './routes/portal.redeem.js';
@@ -151,6 +152,7 @@ app.use('/api/admin/audit',     adminAuditRoutes);
 app.use('/api/admin/statuses',  adminStatusesRoutes);
 app.use('/api/admin/settings',  adminSettingsRoutes);
 app.use('/api/admin/world',     adminWorldRoutes);
+app.use('/api/admin/world',     adminOffsetsRoutes);
 
 // ── Portal API Routes ────────────────────────────────────────────────────────
 

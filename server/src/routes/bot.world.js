@@ -213,6 +213,45 @@ router.get('/servers',
     res.json({ servers: out, preselect_server_id: preselectServerId });
   });
 
+// ── GET /servers/:id/offset-blob ─────────────────────────────────────────────
+// Bot-facing serve of a server's SIGNED offset blob (Phase D/E). Auth = the SAME
+// ingest middleware as /spawns (validateSpawnIngest → spawn_tracking gate; token
+// via Authorization: Bearer since a GET carries no body). The blob's ed25519
+// signature — verified by the bot with its COMPILED pubkey — is the tamper gate,
+// so the stored blob is safe to serve to any authed bot verbatim. 404 when the
+// server has no signed blob yet (unsigned).
+//
+//   200 → the parsed { payload_b64, signature_b64 } object.
+//   404 → { error: 'no signed offsets' }  (server missing OR blob unsigned).
+router.get('/servers/:id/offset-blob',
+  validateSpawnIngest,
+  async (req, res) => {
+    const userId = await requireSpawnTracking(req, res);
+    if (userId == null) return;
+
+    const serverId = parseInt(req.params.id, 10);
+    if (!Number.isFinite(serverId) || serverId < 0) {
+      return res.status(400).json({ error: 'Bad server id' });
+    }
+
+    const server = await db('game_servers')
+      .where('id', serverId)
+      .select('offset_signed_blob')
+      .first();
+    if (!server || server.offset_signed_blob == null) {
+      return res.status(404).json({ error: 'no signed offsets' });
+    }
+
+    // Stored as JSON.stringify({payload_b64,signature_b64}); parse it back so the
+    // bot receives the object directly. A malformed stored blob (shouldn't happen
+    // — it was written by buildBlob) is treated as unsigned.
+    let blob;
+    try { blob = JSON.parse(server.offset_signed_blob); }
+    catch { return res.status(404).json({ error: 'no signed offsets' }); }
+
+    res.json(blob);
+  });
+
 // ── POST /spawns ─────────────────────────────────────────────────────────────
 router.post('/spawns',
   validateSpawnIngest,

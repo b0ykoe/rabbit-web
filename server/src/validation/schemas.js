@@ -341,6 +341,38 @@ export const variantUpdateSchema = z.object({
   { message: 'Provide at least one field to update' },
 );
 
+// ── Admin: Offset overrides (world, 038 — Phase D) ───────────────────────────
+// The signed offset-override system. A server = base "Stock EP4" GameLayout +
+// a few field overrides, signed with a SEPARATE password-encrypted Ed25519 key
+// (NOT the always-hot bot-token key). See crypto/offsetSigning.js.
+//
+// POST /api/admin/world/offset-key/generate — mint the signing key. The
+// password wraps the private key at rest (scrypt+aes-256-gcm); min 8 chars.
+export const offsetKeyGenSchema = z.object({
+  password: z.string().min(8),
+});
+
+// PUT /api/admin/world/servers/:id/offsets — set the engine fingerprint
+// (stamp/size, both optional) + REPLACE the server's field overrides. Every
+// field_name is validated against offset_field_catalog in the route (400 else);
+// values are plain integers (an offset can be negative, so no nonnegative gate).
+// overrides capped at 600 (the whole GameLayout is well under that).
+export const offsetsPutSchema = z.object({
+  stamp:     z.coerce.number().int().nonnegative().optional(),
+  size:      z.coerce.number().int().nonnegative().optional(),
+  overrides: z.array(z.object({
+    field_name: z.string().min(1).max(64),
+    value:      z.coerce.number().int(),
+  })).max(600),
+});
+
+// POST /api/admin/world/servers/:id/offsets/sign — sign the current overrides
+// into a blob. password is required (min 1); a WRONG password fails cleanly (403)
+// in the route via the crypto module's typed auth error.
+export const offsetSignSchema = z.object({
+  password: z.string().min(1),
+});
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function validate(schema) {
