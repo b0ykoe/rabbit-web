@@ -755,6 +755,7 @@ function ServerOverviewBody({ server }) {
   const [loadingMaps, setLoadingMaps] = useState(false);
 
   const [mobQuery, setMobQuery] = useState('');
+  const [npcQuery, setNpcQuery] = useState('');
   const [importing, setImporting] = useState(false);   // name-list import in flight
 
   const loadOverview = async () => {
@@ -793,7 +794,7 @@ function ServerOverviewBody({ server }) {
     setImporting(true);
     try {
       const res = await adminApi.importServerNames(server.id, file);
-      showSnackbar(`Imported ${res?.zones ?? 0} zones, ${res?.mobs ?? 0} mobs`);
+      showSnackbar(`Imported ${res?.zones ?? 0} zones, ${res?.mobs ?? 0} mobs, ${res?.npcs ?? 0} NPCs`);
       await loadOverview();
     } catch (err) {
       showSnackbar(err.data?.error || err.message || 'Import failed', 'error');
@@ -811,11 +812,20 @@ function ServerOverviewBody({ server }) {
   const counts = overview?.counts || {};
   const zones  = overview?.zones || [];
   const mobs   = overview?.mobs || [];
+  const npcs   = overview?.npcs || [];
 
   const q = mobQuery.trim().toLowerCase();
   const filteredMobs = q
     ? mobs.filter((m) => String(m.mob_id).includes(q) || (m.name || '').toLowerCase().includes(q))
     : mobs;
+
+  const nq = npcQuery.trim().toLowerCase();
+  const filteredNpcs = nq
+    ? npcs.filter((n) =>
+        String(n.npc_id).includes(nq) ||
+        (n.name || '').toLowerCase().includes(nq) ||
+        (n.type || '').toLowerCase().includes(nq))
+    : npcs;
 
   return (
     <Box sx={{ py: 1.5 }}>
@@ -831,6 +841,7 @@ function ServerOverviewBody({ server }) {
             <Chip label={`${counts.zones_total ?? 0} zones`} size="small" variant="outlined" />
             <Chip label={`${counts.zones_named ?? 0} named`} size="small" color="success" variant="outlined" />
             <Chip label={`${counts.mobs_named ?? 0} mobs named`} size="small" color="success" variant="outlined" />
+            <Chip label={`${counts.npcs_named ?? 0} NPCs named`} size="small" color="success" variant="outlined" />
             <Chip label={`${counts.missing_name ?? 0} missing name`} size="small" color={counts.missing_name ? 'warning' : 'default'} variant="outlined" />
             <Chip label={`${counts.missing_data ?? 0} missing data`} size="small" color={counts.missing_data ? 'warning' : 'default'} variant="outlined" />
             <Chip label={`${counts.missing_bounds ?? 0} missing bounds`} size="small" color={counts.missing_bounds ? 'warning' : 'default'} variant="outlined" />
@@ -851,10 +862,10 @@ function ServerOverviewBody({ server }) {
               </Button>
             }
           >
-            Zone and monster names come from the bot's <strong>“Export names (JSON + CSV)”</strong> button,
+            Zone, monster and NPC names come from the bot's <strong>“Export names (JSON + CSV)”</strong> button,
             which writes the lists to a local file. Import that <strong>names.json</strong> (or a
-            <code> zones.csv</code>/<code>mobs.csv</code>) here to update the reference lists — a JSON file
-            replaces both lists, a CSV replaces just the one it contains.
+            <code> zones.csv</code>/<code>mobs.csv</code>/<code>npcs.csv</code>) here to update the reference
+            lists — a JSON file replaces all three lists, a CSV replaces just the one it contains.
           </Alert>
 
           {/* Zone coverage table */}
@@ -930,6 +941,55 @@ function ServerOverviewBody({ server }) {
             </TableContainer>
           </Paper>
 
+          {/* NPC names table (searchable) */}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 1 }}>
+            <Typography variant="subtitle2">NPCs ({npcs.length})</Typography>
+            <TextField
+              size="small" placeholder="Filter by id, name or type" value={npcQuery}
+              onChange={(e) => setNpcQuery(e.target.value)}
+              InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+              sx={{ width: 260 }}
+            />
+          </Box>
+          <Paper variant="outlined" sx={{ mb: 2 }}>
+            <TableContainer sx={{ maxHeight: 360 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: 120 }}>NPC ID</TableCell>
+                    <TableCell>Name</TableCell>
+                    <TableCell sx={{ width: 140 }}>Type</TableCell>
+                    <TableCell align="right" sx={{ width: 90 }}>Zone</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {npcs.length === 0 && (
+                    <TableRow><TableCell colSpan={4}><Typography variant="caption" color="text.disabled">No NPC names for this server yet.</Typography></TableCell></TableRow>
+                  )}
+                  {npcs.length > 0 && filteredNpcs.length === 0 && (
+                    <TableRow><TableCell colSpan={4}><Typography variant="caption" color="text.disabled">No NPCs match “{npcQuery}”.</Typography></TableCell></TableRow>
+                  )}
+                  {filteredNpcs.map((n) => (
+                    <TableRow key={n.npc_id} hover>
+                      <TableCell><Typography variant="caption" fontFamily="monospace">{n.npc_id}</Typography></TableCell>
+                      <TableCell><Typography variant="body2">{n.name}</Typography></TableCell>
+                      <TableCell>
+                        {n.type
+                          ? <Typography variant="caption" color="text.secondary">{n.type}</Typography>
+                          : <Typography variant="caption" color="text.disabled">—</Typography>}
+                      </TableCell>
+                      <TableCell align="right">
+                        {n.zone_no != null && n.zone_no >= 0
+                          ? <Typography variant="caption" fontFamily="monospace">{n.zone_no}</Typography>
+                          : <Typography variant="caption" color="text.disabled">—</Typography>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
           {/* Background images — reuses the zone-maps upload/replace/delete row. */}
           <Typography variant="subtitle2" sx={{ mb: 1 }}>Background images</Typography>
           {loadingMaps && (
@@ -969,6 +1029,7 @@ function ServerOverviewRow({ server }) {
   const [open, setOpen] = useState(false);
   const named = server.zone_named_count ?? null;
   const mobNamed = server.mob_named_count ?? null;
+  const npcNamed = server.npc_named_count ?? null;
 
   return (
     <>
@@ -990,9 +1051,14 @@ function ServerOverviewRow({ server }) {
             ? '—'
             : <Chip label={`${mobNamed} mobs`} size="small" variant="outlined" color={mobNamed ? 'success' : 'default'} />}
         </TableCell>
+        <TableCell align="right">
+          {npcNamed == null
+            ? '—'
+            : <Chip label={`${npcNamed} NPCs`} size="small" variant="outlined" color={npcNamed ? 'success' : 'default'} />}
+        </TableCell>
       </TableRow>
       <TableRow>
-        <TableCell colSpan={5} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+        <TableCell colSpan={6} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
           <Collapse in={open} timeout="auto" unmountOnExit>
             {open && <ServerOverviewBody server={server} />}
           </Collapse>
@@ -1016,9 +1082,9 @@ function ServerOverviewPanel() {
     <Box sx={{ mb: 5 }}>
       <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>Monster Map — Reference lists &amp; coverage</Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-        Per-server zone &amp; monster reference names plus coverage. Expand a server to see what's
-        missing, the per-zone coverage (name / data / bounds / background) and the monster-name list.
-        These lists are populated by importing the bot's exported <strong>JSON/CSV</strong> file
+        Per-server zone, monster &amp; NPC reference names plus coverage. Expand a server to see what's
+        missing, the per-zone coverage (name / data / bounds / background) and the monster- and NPC-name
+        lists. These lists are populated by importing the bot's exported <strong>JSON/CSV</strong> file
         (the bot writes it locally via its <strong>“Export names (JSON + CSV)”</strong> button).
       </Typography>
 
@@ -1032,12 +1098,13 @@ function ServerOverviewPanel() {
                 <TableCell>Server</TableCell>
                 <TableCell align="right">Zones named</TableCell>
                 <TableCell align="right">Mobs named</TableCell>
+                <TableCell align="right">NPCs named</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {loading && <TableRow><TableCell colSpan={5}>Loading…</TableCell></TableRow>}
+              {loading && <TableRow><TableCell colSpan={6}>Loading…</TableCell></TableRow>}
               {!loading && rows.length === 0 && (
-                <TableRow><TableCell colSpan={5}><Typography variant="caption" color="text.disabled">No servers tracked yet.</Typography></TableCell></TableRow>
+                <TableRow><TableCell colSpan={6}><Typography variant="caption" color="text.disabled">No servers tracked yet.</Typography></TableCell></TableRow>
               )}
               {rows.map((r) => <ServerOverviewRow key={r.id} server={r} />)}
             </TableBody>

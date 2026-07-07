@@ -345,9 +345,9 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     // Coverage counts so the admin sees what data a server carries before
     // publishing or deleting it: distinct mobs, spawn cells, and total sightings.
     // known_ips (034) lists the game socket IPs registered for each server.
-    // zone_named_count / mob_named_count (035) count the REFERENCE name rows so
-    // the admin sees how complete the zone/monster name lists are.
-    const [mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts] = await Promise.all([
+    // zone_named_count / mob_named_count (035) + npc_named_count (036) count the
+    // REFERENCE name rows so the admin sees how complete the name lists are.
+    const [mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts, npcNameCounts] = await Promise.all([
       db('mob_catalog').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as mob_count')),
@@ -367,11 +367,15 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       db('mob_names').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as mob_named_count')),
+      db('game_npcs').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(*) as npc_named_count')),
     ]);
     const mobMap  = Object.fromEntries(mobCounts.map(c => [c.server_id, Number(c.mob_count)]));
     const cellMap = Object.fromEntries(cellCounts.map(c => [c.server_id, c]));
     const zoneNameMap = Object.fromEntries(zoneNameCounts.map(c => [c.server_id, Number(c.zone_named_count)]));
     const mobNameMap  = Object.fromEntries(mobNameCounts.map(c => [c.server_id, Number(c.mob_named_count)]));
+    const npcNameMap  = Object.fromEntries(npcNameCounts.map(c => [c.server_id, Number(c.npc_named_count)]));
     const ipsMap  = new Map();
     for (const h of hostRows) {
       if (!ipsMap.has(h.server_id)) ipsMap.set(h.server_id, []);
@@ -385,6 +389,7 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       s.sightings_total   = cc ? Number(cc.sightings_total || 0) : 0;
       s.zone_named_count  = zoneNameMap[s.id] || 0;
       s.mob_named_count   = mobNameMap[s.id]  || 0;
+      s.npc_named_count   = npcNameMap[s.id]  || 0;
       s.known_ips         = ipsMap.get(s.id) || [];
     }
   }
@@ -536,6 +541,8 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
     // 035: also purge the server's reference zone + monster name lists.
     c.game_zones              = await trx('game_zones').where('server_id', id).del();
     c.mob_names               = await trx('mob_names').where('server_id', id).del();
+    // 036: also purge the server's reference NPC name list.
+    c.game_npcs               = await trx('game_npcs').where('server_id', id).del();
     // 034: also purge the server's registered host IPs.
     c.game_server_hosts       = await trx('game_server_hosts').where('server_id', id).del();
     c.game_servers            = await trx('game_servers').where('id', id).del();
@@ -559,10 +566,12 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // GET /api/admin/world/servers/:id/overview — coverage + reference-name drill-in.
-//   Response: { counts:{ zones_total, zones_named, mobs_named, missing_name,
-//                         missing_background, missing_data, missing_bounds },
+//   Response: { counts:{ zones_total, zones_named, mobs_named, npcs_named,
+//                         missing_name, missing_background, missing_data,
+//                         missing_bounds },
 //               zones:[{ zone_no, name|null, has_data, has_bounds, has_background }],
-//               mobs:[{ mob_id, name }] }
+//               mobs:[{ mob_id, name }],
+//               npcs:[{ npc_id, name, type, zone_no }] }
 router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
   const serverId = parseInt(req.params.id, 10);
   if (!Number.isFinite(serverId) || serverId < 0) {
@@ -573,15 +582,17 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
   if (!server) return res.status(404).json({ error: 'Server not found' });
 
   const MOB_CAP = 5000;   // cap the monster-name list returned to the panel.
+  const NPC_CAP = 5000;   // cap the NPC-name list returned to the panel.
   const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
   // Zone universe = DISTINCT zone_no UNION across the four per-zone signals:
   // named zones (game_zones), framed bounds (zone_bounds), background images
   // (zone_maps), and spawn data (mob_spawn_cells). Built in JS (like the
   // zone-maps coverage handler) so an orphan in any one source still surfaces.
-  // mobsTotal is an UNFILTERED count so the mobs_named rollup stays accurate even
-  // when the ?q search narrows / the MOB_CAP truncates the returned mob list.
-  const [nameZones, boundZones, imageZones, dataZones, mobRows, mobsTotalRow] = await Promise.all([
+  // mobsTotal / npcsTotal are UNFILTERED counts so the mobs_named / npcs_named
+  // rollups stay accurate even when the ?q search narrows / the caps truncate the
+  // returned lists. The NPC ?q filter matches name OR type (or an exact npc_id).
+  const [nameZones, boundZones, imageZones, dataZones, mobRows, mobsTotalRow, npcRows, npcsTotalRow] = await Promise.all([
     db('game_zones').where('server_id', serverId).select('zone_no', 'name'),
     db('zone_bounds').where('server_id', serverId).distinct('zone_no').select('zone_no'),
     db('zone_maps').where('server_id', serverId).distinct('zone_no').select('zone_no'),
@@ -599,8 +610,23 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
       return mq.orderBy('mob_id', 'asc').limit(MOB_CAP);
     })(),
     db('mob_names').where('server_id', serverId).count('* as c').first(),
+    (() => {
+      let nq = db('game_npcs').where('server_id', serverId)
+        .select('npc_id', 'name', 'type', 'zone_no');
+      if (q) {
+        nq = nq.where(function () {
+          this.where('name', 'like', `%${q}%`)
+              .orWhere('type', 'like', `%${q}%`);
+          const asId = parseInt(q, 10);
+          if (Number.isFinite(asId)) this.orWhere('npc_id', asId);
+        });
+      }
+      return nq.orderBy('npc_id', 'asc').limit(NPC_CAP);
+    })(),
+    db('game_npcs').where('server_id', serverId).count('* as c').first(),
   ]);
   const mobsTotal = Number(mobsTotalRow?.c ?? 0);
+  const npcsTotal = Number(npcsTotalRow?.c ?? 0);
 
   const nameByZone = new Map(nameZones.map(r => [r.zone_no, r.name]));
   const boundsSet  = new Set(boundZones.map(r => r.zone_no));
@@ -625,6 +651,7 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
     zones_total:        zones.length,
     zones_named:        zones.filter(z => z.name != null).length,
     mobs_named:         mobsTotal,
+    npcs_named:         npcsTotal,
     missing_name:       zones.filter(z => z.name == null).length,
     missing_background: zones.filter(z => !z.has_background).length,
     missing_data:       zones.filter(z => !z.has_data).length,
@@ -635,17 +662,19 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
     counts,
     zones,
     mobs: mobRows.map(r => ({ mob_id: r.mob_id, name: r.name })),
+    npcs: npcRows.map(r => ({ npc_id: r.npc_id, name: r.name, type: r.type, zone_no: r.zone_no })),
   });
 });
 
 // POST /api/admin/world/servers/:id/import-names — REPLACE-ALL import of a
-// server's reference ZONE + MONSTER name tables from an admin-uploaded file
-// (field 'file'). The bot writes names.json / zones.csv / mobs.csv locally; the
-// GM uploads ONE of them here (no user may push into the panel — only a
-// super_admin imports). Format is DETECTED from the content: a body whose first
-// non-whitespace char is '{' or '[' is JSON ({zones?:[{zone_no,name}],
-// mobs?:[{mob_id,name}]}); otherwise it is CSV, and the list is identified by the
-// header row (zone_no,name → zones ; mob_id,name → mobs). Valid rows REPLACE the
+// server's reference ZONE + MONSTER + NPC name tables from an admin-uploaded file
+// (field 'file'). The bot writes names.json / zones.csv / mobs.csv / npcs.csv
+// locally; the GM uploads ONE of them here (no user may push into the panel —
+// only a super_admin imports). Format is DETECTED from the content: a body whose
+// first non-whitespace char is '{' or '[' is JSON ({zones?:[{zone_no,name}],
+// mobs?:[{mob_id,name}], npcs?:[{npc_id,name,type,zone_no}]}); otherwise it is
+// CSV, and the list is identified by the header row (zone_no,name → zones ;
+// mob_id,name → mobs ; npc_id,name,type,zone_no → npcs). Valid rows REPLACE the
 // server's rows for each list PRESENT, in ONE transaction (exactly like the old
 // bot ingest); a list absent from the file is left untouched.
 router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, async (req, res) => {
@@ -673,16 +702,19 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
   const trimmed = text.replace(/^\s+/, '');
   if (!trimmed) { cleanupTmp(); return res.status(400).json({ error: 'Empty file' }); }
 
-  // Row limits (mirror the old ingest caps): zones ≤4000, mobs ≤60000.
+  // Row limits (mirror the old ingest caps): zones ≤4000, mobs ≤60000, npcs ≤60000.
   const ZONE_CAP = 4000;
   const MOB_CAP  = 60000;
+  const NPC_CAP  = 60000;
 
   // Collected + validated rows. null = list absent from the file (leave the
   // server's rows untouched); an array (even empty) = list present → REPLACE-ALL.
   let zones = null;   // [{ zone_no, name }]
   let mobs  = null;   // [{ mob_id, name }]
+  let npcs  = null;   // [{ npc_id, name, type, zone_no }]
 
-  // Validators: zone_no int 0..65535 + name 1..128; mob_id int >=1 + name 1..96.
+  // Validators: zone_no int 0..65535 + name 1..128; mob_id int >=1 + name 1..96;
+  // npc_id int >=1 + name 1..96 + optional type ≤32 + optional zone_no 0..65535.
   const takeZone = (zoneNoRaw, nameRaw) => {
     const zoneNo = Number.parseInt(zoneNoRaw, 10);
     const name = typeof nameRaw === 'string' ? nameRaw : (nameRaw == null ? '' : String(nameRaw));
@@ -696,6 +728,24 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
     if (!Number.isInteger(mobId) || mobId < 1) return null;
     if (name.length < 1 || name.length > 96) return null;
     return { mob_id: mobId, name };
+  };
+  // type/zone_no are OPTIONAL: an empty/blank/absent type → null; a missing or
+  // out-of-range zone_no → null (a named NPC with no placement is still valid).
+  const takeNpc = (npcIdRaw, nameRaw, typeRaw, zoneNoRaw) => {
+    const npcId = Number.parseInt(npcIdRaw, 10);
+    const name = typeof nameRaw === 'string' ? nameRaw : (nameRaw == null ? '' : String(nameRaw));
+    if (!Number.isInteger(npcId) || npcId < 1) return null;
+    if (name.length < 1 || name.length > 96) return null;
+    let type = typeof typeRaw === 'string' ? typeRaw : (typeRaw == null ? '' : String(typeRaw));
+    type = type.trim();
+    if (type.length === 0) type = null;
+    else if (type.length > 32) type = type.slice(0, 32);
+    let zoneNo = null;
+    if (zoneNoRaw != null && !(typeof zoneNoRaw === 'string' && zoneNoRaw.trim() === '')) {
+      const zn = Number.parseInt(zoneNoRaw, 10);
+      if (Number.isInteger(zn) && zn >= 0 && zn <= 65535) zoneNo = zn;
+    }
+    return { npc_id: npcId, name, type, zone_no: zoneNo };
   };
 
   const firstChar = trimmed[0];
@@ -724,9 +774,17 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
         if (v) mobs.push(v);
       }
     }
-    if (zones == null && mobs == null) {
+    if (Array.isArray(parsed.npcs)) {
+      npcs = [];
+      for (const n of parsed.npcs) {
+        if (!n || typeof n !== 'object') continue;
+        const v = takeNpc(n.npc_id, n.name, n.type, n.zone_no);
+        if (v) npcs.push(v);
+      }
+    }
+    if (zones == null && mobs == null && npcs == null) {
       cleanupTmp();
-      return res.status(400).json({ error: 'JSON has no zones or mobs array' });
+      return res.status(400).json({ error: 'JSON has no zones, mobs or npcs array' });
     }
   } else {
     // ── CSV path ───────────────────────────────────────────────────────────
@@ -738,9 +796,13 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
     const header = rows[start].map(c => c.trim().toLowerCase());
     const isZoneCsv = header[0] === 'zone_no' && header[1] === 'name';
     const isMobCsv  = header[0] === 'mob_id'  && header[1] === 'name';
-    if (!isZoneCsv && !isMobCsv) {
+    // NPC CSV: npc_id,name,type,zone_no. type/zone_no are optional per-row (blank
+    // cells → null); the header is matched only on the first two columns being
+    // npc_id,name so a trailing-column mismatch does not reject a valid file.
+    const isNpcCsv  = header[0] === 'npc_id'  && header[1] === 'name';
+    if (!isZoneCsv && !isMobCsv && !isNpcCsv) {
       cleanupTmp();
-      return res.status(400).json({ error: 'CSV header must be "zone_no,name" or "mob_id,name"' });
+      return res.status(400).json({ error: 'CSV header must be "zone_no,name", "mob_id,name" or "npc_id,name,type,zone_no"' });
     }
     const dataRows = rows.slice(start + 1);
     if (isZoneCsv) {
@@ -750,12 +812,19 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
         const v = takeZone(r[0], r[1]);
         if (v) zones.push(v);
       }
-    } else {
+    } else if (isMobCsv) {
       mobs = [];
       for (const r of dataRows) {
         if (r.length === 1 && r[0].trim() === '') continue;   // skip blank line
         const v = takeMob(r[0], r[1]);
         if (v) mobs.push(v);
+      }
+    } else {
+      npcs = [];
+      for (const r of dataRows) {
+        if (r.length === 1 && r[0].trim() === '') continue;   // skip blank line
+        const v = takeNpc(r[0], r[1], r[2], r[3]);
+        if (v) npcs.push(v);
       }
     }
   }
@@ -773,6 +842,12 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
     ? [...new Map(mobs.map(m => [m.mob_id, {
         server_id: serverId, mob_id: m.mob_id, name: m.name, updated_at: now,
       }])).values()].slice(0, MOB_CAP)
+    : null;
+  const npcRows = npcs != null
+    ? [...new Map(npcs.map(n => [n.npc_id, {
+        server_id: serverId, npc_id: n.npc_id, name: n.name,
+        type: n.type, zone_no: n.zone_no, updated_at: now,
+      }])).values()].slice(0, NPC_CAP)
     : null;
 
   // REPLACE-ALL per list present, per server, in ONE transaction: DELETE the
@@ -793,6 +868,12 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
           await trx('mob_names').insert(mobRows.slice(i, i + BATCH));
         }
       }
+      if (npcRows) {
+        await trx('game_npcs').where('server_id', serverId).del();
+        for (let i = 0; i < npcRows.length; i += BATCH) {
+          await trx('game_npcs').insert(npcRows.slice(i, i + BATCH));
+        }
+      }
     });
   } catch {
     cleanupTmp();
@@ -807,6 +888,7 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
       orig_name: (req.file.originalname || '').slice(0, 255) || null,
       zones: zoneRows ? zoneRows.length : null,
       mobs:  mobRows  ? mobRows.length  : null,
+      npcs:  npcRows  ? npcRows.length  : null,
     },
   });
 
@@ -814,6 +896,7 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
     ok: true,
     zones: zoneRows ? zoneRows.length : 0,
     mobs:  mobRows  ? mobRows.length  : 0,
+    npcs:  npcRows  ? npcRows.length  : 0,
   });
 });
 
