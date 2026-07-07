@@ -72,6 +72,63 @@ function zoneMapUploadSingle(req, res, next) {
   });
 }
 
+// ── Reference-name import upload (035) ───────────────────────────────────────
+// The bot writes names.json / zones.csv / mobs.csv locally now; a super_admin
+// uploads ONE of those files here. Name lists are tiny compared to a background
+// image, so a 16 MB cap is plenty. Same DISK-into-_tmp multer convention as the
+// zone-map upload, and the same wrapper for a clean 400 on an over-limit body.
+const NAMES_MAX_BYTES = 16 * 1024 * 1024;
+const NAMES_MAX_MB    = Math.round(NAMES_MAX_BYTES / (1024 * 1024));
+
+const namesUpload = multer({
+  dest: path.join(config.bot.privateDir, '_tmp'),
+  limits: { fileSize: NAMES_MAX_BYTES },
+});
+
+function namesUploadSingle(req, res, next) {
+  namesUpload.single('file')(req, res, (err) => {
+    if (err) {
+      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      return res.status(400).json({
+        error: tooBig ? `File too large (max ${NAMES_MAX_MB} MB)` : 'Upload failed',
+      });
+    }
+    next();
+  });
+}
+
+// RFC-4180-tolerant CSV parser. Handles quoted fields, doubled quotes inside a
+// quoted field, and CRLF or LF line endings. Returns an array of row arrays
+// (each row an array of string cells). A trailing empty line is dropped. Kept
+// deliberately small — the reference lists are two columns of short strings.
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }   // doubled quote
+        inQuotes = false; i += 1; continue;                            // closing quote
+      }
+      field += ch; i += 1; continue;
+    }
+    if (ch === '"') { inQuotes = true; i += 1; continue; }
+    if (ch === ',') { row.push(field); field = ''; i += 1; continue; }
+    if (ch === '\r') { i += 1; continue; }                             // swallow CR (CRLF or bare)
+    if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; i += 1; continue; }
+    field += ch; i += 1;
+  }
+  // Flush the final field/row unless the file ended on a clean newline (which
+  // already pushed the row and left an empty field with an empty row buffer).
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
 // PNG 8-byte signature.
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -578,6 +635,185 @@ router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
     counts,
     zones,
     mobs: mobRows.map(r => ({ mob_id: r.mob_id, name: r.name })),
+  });
+});
+
+// POST /api/admin/world/servers/:id/import-names — REPLACE-ALL import of a
+// server's reference ZONE + MONSTER name tables from an admin-uploaded file
+// (field 'file'). The bot writes names.json / zones.csv / mobs.csv locally; the
+// GM uploads ONE of them here (no user may push into the panel — only a
+// super_admin imports). Format is DETECTED from the content: a body whose first
+// non-whitespace char is '{' or '[' is JSON ({zones?:[{zone_no,name}],
+// mobs?:[{mob_id,name}]}); otherwise it is CSV, and the list is identified by the
+// header row (zone_no,name → zones ; mob_id,name → mobs). Valid rows REPLACE the
+// server's rows for each list PRESENT, in ONE transaction (exactly like the old
+// bot ingest); a list absent from the file is left untouched.
+router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+
+  // Clean up the staged temp file on any return.
+  const cleanupTmp = () => { try { if (req.file) fs.unlinkSync(req.file.path); } catch { /* ignore */ } };
+
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    cleanupTmp();
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'File is required (field "file")' });
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) { cleanupTmp(); return res.status(404).json({ error: 'Server not found' }); }
+
+  // Read the staged bytes.
+  let text;
+  try { text = fs.readFileSync(req.file.path, 'utf8'); }
+  catch { cleanupTmp(); return res.status(400).json({ error: 'Could not read upload' }); }
+
+  // Strip a UTF-8 BOM so JSON.parse / the CSV header match cleanly.
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  const trimmed = text.replace(/^\s+/, '');
+  if (!trimmed) { cleanupTmp(); return res.status(400).json({ error: 'Empty file' }); }
+
+  // Row limits (mirror the old ingest caps): zones ≤4000, mobs ≤60000.
+  const ZONE_CAP = 4000;
+  const MOB_CAP  = 60000;
+
+  // Collected + validated rows. null = list absent from the file (leave the
+  // server's rows untouched); an array (even empty) = list present → REPLACE-ALL.
+  let zones = null;   // [{ zone_no, name }]
+  let mobs  = null;   // [{ mob_id, name }]
+
+  // Validators: zone_no int 0..65535 + name 1..128; mob_id int >=1 + name 1..96.
+  const takeZone = (zoneNoRaw, nameRaw) => {
+    const zoneNo = Number.parseInt(zoneNoRaw, 10);
+    const name = typeof nameRaw === 'string' ? nameRaw : (nameRaw == null ? '' : String(nameRaw));
+    if (!Number.isInteger(zoneNo) || zoneNo < 0 || zoneNo > 65535) return null;
+    if (name.length < 1 || name.length > 128) return null;
+    return { zone_no: zoneNo, name };
+  };
+  const takeMob = (mobIdRaw, nameRaw) => {
+    const mobId = Number.parseInt(mobIdRaw, 10);
+    const name = typeof nameRaw === 'string' ? nameRaw : (nameRaw == null ? '' : String(nameRaw));
+    if (!Number.isInteger(mobId) || mobId < 1) return null;
+    if (name.length < 1 || name.length > 96) return null;
+    return { mob_id: mobId, name };
+  };
+
+  const firstChar = trimmed[0];
+  if (firstChar === '{' || firstChar === '[') {
+    // ── JSON path ──────────────────────────────────────────────────────────
+    let parsed;
+    try { parsed = JSON.parse(trimmed); }
+    catch { cleanupTmp(); return res.status(400).json({ error: 'Invalid JSON' }); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      cleanupTmp();
+      return res.status(400).json({ error: 'JSON must be an object with zones/mobs' });
+    }
+    if (Array.isArray(parsed.zones)) {
+      zones = [];
+      for (const z of parsed.zones) {
+        if (!z || typeof z !== 'object') continue;
+        const v = takeZone(z.zone_no, z.name);
+        if (v) zones.push(v);
+      }
+    }
+    if (Array.isArray(parsed.mobs)) {
+      mobs = [];
+      for (const m of parsed.mobs) {
+        if (!m || typeof m !== 'object') continue;
+        const v = takeMob(m.mob_id, m.name);
+        if (v) mobs.push(v);
+      }
+    }
+    if (zones == null && mobs == null) {
+      cleanupTmp();
+      return res.status(400).json({ error: 'JSON has no zones or mobs array' });
+    }
+  } else {
+    // ── CSV path ───────────────────────────────────────────────────────────
+    const rows = parseCsv(text);
+    // Drop leading fully-empty rows, then read the header.
+    let start = 0;
+    while (start < rows.length && rows[start].every(c => c.trim() === '')) start += 1;
+    if (start >= rows.length) { cleanupTmp(); return res.status(400).json({ error: 'Empty CSV' }); }
+    const header = rows[start].map(c => c.trim().toLowerCase());
+    const isZoneCsv = header[0] === 'zone_no' && header[1] === 'name';
+    const isMobCsv  = header[0] === 'mob_id'  && header[1] === 'name';
+    if (!isZoneCsv && !isMobCsv) {
+      cleanupTmp();
+      return res.status(400).json({ error: 'CSV header must be "zone_no,name" or "mob_id,name"' });
+    }
+    const dataRows = rows.slice(start + 1);
+    if (isZoneCsv) {
+      zones = [];
+      for (const r of dataRows) {
+        if (r.length === 1 && r[0].trim() === '') continue;   // skip blank line
+        const v = takeZone(r[0], r[1]);
+        if (v) zones.push(v);
+      }
+    } else {
+      mobs = [];
+      for (const r of dataRows) {
+        if (r.length === 1 && r[0].trim() === '') continue;   // skip blank line
+        const v = takeMob(r[0], r[1]);
+        if (v) mobs.push(v);
+      }
+    }
+  }
+
+  const now = nowSec();
+
+  // Dedupe on the PK (a later occurrence wins) BEFORE the replace-all so the bulk
+  // insert never trips a duplicate-key on its own batch. Cap after dedupe.
+  const zoneRows = zones != null
+    ? [...new Map(zones.map(z => [z.zone_no, {
+        server_id: serverId, zone_no: z.zone_no, name: z.name, updated_at: now,
+      }])).values()].slice(0, ZONE_CAP)
+    : null;
+  const mobRows = mobs != null
+    ? [...new Map(mobs.map(m => [m.mob_id, {
+        server_id: serverId, mob_id: m.mob_id, name: m.name, updated_at: now,
+      }])).values()].slice(0, MOB_CAP)
+    : null;
+
+  // REPLACE-ALL per list present, per server, in ONE transaction: DELETE the
+  // server's rows then bulk-insert the fresh set in ~500-row batches. A list
+  // ABSENT from the file (null) is left untouched.
+  const BATCH = 500;
+  try {
+    await db.transaction(async (trx) => {
+      if (zoneRows) {
+        await trx('game_zones').where('server_id', serverId).del();
+        for (let i = 0; i < zoneRows.length; i += BATCH) {
+          await trx('game_zones').insert(zoneRows.slice(i, i + BATCH));
+        }
+      }
+      if (mobRows) {
+        await trx('mob_names').where('server_id', serverId).del();
+        for (let i = 0; i < mobRows.length; i += BATCH) {
+          await trx('mob_names').insert(mobRows.slice(i, i + BATCH));
+        }
+      }
+    });
+  } catch {
+    cleanupTmp();
+    return res.status(500).json({ error: 'Import failed' });
+  }
+
+  cleanupTmp();
+
+  await recordAudit(db, req, {
+    action: 'world.names.import', subjectType: 'game_server', subjectId: String(serverId),
+    newValues: {
+      orig_name: (req.file.originalname || '').slice(0, 255) || null,
+      zones: zoneRows ? zoneRows.length : null,
+      mobs:  mobRows  ? mobRows.length  : null,
+    },
+  });
+
+  res.json({
+    ok: true,
+    zones: zoneRows ? zoneRows.length : 0,
+    mobs:  mobRows  ? mobRows.length  : 0,
   });
 });
 

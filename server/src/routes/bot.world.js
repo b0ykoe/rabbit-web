@@ -24,12 +24,12 @@
 //
 
 import crypto from 'node:crypto';
-import express, { Router } from 'express';
+import { Router } from 'express';
 import db from '../db.js';
 import { validateSpawnIngest } from '../middleware/spawnIngest.js';
 import {
   validate, spawnIngestSchema, zoneBoundsSchema,
-  sessionStartSchema, sessionStopSchema, namesSchema,
+  sessionStartSchema, sessionStopSchema,
 } from '../validation/schemas.js';
 
 const router = Router();
@@ -598,84 +598,6 @@ router.post('/zone-bounds',
       });
 
     res.json({ ok: true, server_id: serverId, zone_no: b.zone_no });
-  });
-
-// ── POST /names ──────────────────────────────────────────────────────────────
-// REPLACE-ALL ingest of a server's reference ZONE + MONSTER name tables. The bot
-// probes the client mob-DB + teleport zone table offline and dumps them here; the
-// portal wipes the prior per-list rows for the server and bulk-inserts the fresh
-// set — the client then labels the monster map + admin coverage by real name.
-//
-// Middleware order mirrors /spawns (auth BEFORE body parse) but the body can be a
-// few MB (a full mob-DB probe), so a RAISED express.json({limit:'24mb'}) is
-// mounted for this route. validateSpawnIngest reads the HEADER token, so it still
-// runs before the body is parsed. (index.js ALSO mounts the raised parser for
-// this path ahead of the global small-default express.json so the body never
-// trips the global cap; the route-level parser here is idempotent — an
-// already-parsed body is a no-op — and keeps the route self-describing.)
-router.post('/names',
-  validateSpawnIngest,
-  express.json({ limit: '24mb' }),
-  validate(namesSchema),
-  async (req, res) => {
-    const userId = await requireSpawnTracking(req, res);
-    if (userId == null) return;
-
-    const { zones, mobs } = req.validated;
-    const now = nowSec();
-
-    // Same hard server-resolution contract as /spawns: a supplied-but-unknown
-    // server_id 404s; a missing/unresolvable hint is a 400 (a real reference dump
-    // always carries a resolvable identity — the bot HARD-BLOCKS the export
-    // button until a server is selected).
-    const resolved = await resolveServerId(req.validated);
-    if (resolved.notFound) {
-      return res.status(404).json({ error: 'Unknown server_id' });
-    }
-    const serverId = resolved.id;
-    if (serverId == null) {
-      return res.status(400).json({ error: 'Could not resolve server (provide server_id)' });
-    }
-
-    // Dedupe incoming rows on the PK (a client dump can carry duplicate ids — a
-    // later occurrence wins) BEFORE the replace-all so the bulk insert never hits
-    // a duplicate-key on its own batch.
-    const zoneRows = zones && zones.length
-      ? [...new Map(zones.map(z => [z.zone_no, {
-          server_id: serverId, zone_no: z.zone_no, name: z.name, updated_at: now,
-        }])).values()]
-      : null;
-    const mobRows = mobs && mobs.length
-      ? [...new Map(mobs.map(m => [m.mob_id, {
-          server_id: serverId, mob_id: m.mob_id, name: m.name, updated_at: now,
-        }])).values()]
-      : null;
-
-    // REPLACE-ALL per list, per server, in ONE transaction: DELETE the server's
-    // rows then bulk-insert the fresh set in ~500-row batches. A list that is
-    // ABSENT from the body is left untouched (only present lists are replaced).
-    const BATCH = 500;
-    await db.transaction(async (trx) => {
-      if (zoneRows) {
-        await trx('game_zones').where('server_id', serverId).del();
-        for (let i = 0; i < zoneRows.length; i += BATCH) {
-          await trx('game_zones').insert(zoneRows.slice(i, i + BATCH));
-        }
-      }
-      if (mobRows) {
-        await trx('mob_names').where('server_id', serverId).del();
-        for (let i = 0; i < mobRows.length; i += BATCH) {
-          await trx('mob_names').insert(mobRows.slice(i, i + BATCH));
-        }
-      }
-    });
-
-    res.json({
-      ok: true,
-      server_id: serverId,
-      zones: zoneRows ? zoneRows.length : 0,
-      mobs:  mobRows  ? mobRows.length  : 0,
-    });
   });
 
 // ── POST /session/start ──────────────────────────────────────────────────────

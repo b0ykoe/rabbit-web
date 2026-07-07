@@ -103,6 +103,17 @@ export const adminApi = {
     const qs = q ? `?${new URLSearchParams({ q }).toString()}` : '';
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/overview${qs}`);
   },
+
+  // Import a bot-exported reference name list (super-admin) — additive. The bot
+  // writes names.json / zones.csv / mobs.csv locally; the admin uploads one file
+  // here. Multipart FormData (single field "file"), same pattern as uploadZoneMap
+  // (apiFetch skips the JSON Content-Type for FormData so the browser sets the
+  // multipart boundary; CSRF + credentials still apply). → { ok, zones, mobs }.
+  importServerNames: (id, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/import-names`, { method: 'POST', body: formData });
+  },
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────

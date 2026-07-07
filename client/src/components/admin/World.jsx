@@ -746,6 +746,7 @@ function BoolCell({ ok }) {
 // getServerOverview (counts + zone coverage + mob names) AND listZoneMaps (for
 // the reusable background upload/replace/delete controls) on first expand.
 function ServerOverviewBody({ server }) {
+  const { showSnackbar } = useSnackbar();
   const [overview, setOverview] = useState(null);   // null = not loaded
   const [loadingOv, setLoadingOv] = useState(false);
   const [ovError, setOvError]   = useState('');
@@ -754,6 +755,7 @@ function ServerOverviewBody({ server }) {
   const [loadingMaps, setLoadingMaps] = useState(false);
 
   const [mobQuery, setMobQuery] = useState('');
+  const [importing, setImporting] = useState(false);   // name-list import in flight
 
   const loadOverview = async () => {
     setLoadingOv(true);
@@ -779,6 +781,24 @@ function ServerOverviewBody({ server }) {
       setZoneMaps([]);
     } finally {
       setLoadingMaps(false);
+    }
+  };
+
+  // Import a bot-exported reference name list (names.json / zones.csv / mobs.csv).
+  // Single-file multipart upload; refreshes the overview on success.
+  const handleImportNames = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await adminApi.importServerNames(server.id, file);
+      showSnackbar(`Imported ${res?.zones ?? 0} zones, ${res?.mobs ?? 0} mobs`);
+      await loadOverview();
+    } catch (err) {
+      showSnackbar(err.data?.error || err.message || 'Import failed', 'error');
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -817,10 +837,24 @@ function ServerOverviewBody({ server }) {
             <Chip label={`${counts.missing_background ?? 0} missing background`} size="small" color={counts.missing_background ? 'warning' : 'default'} variant="outlined" />
           </Box>
 
-          <Alert severity="info" sx={{ mb: 2 }}>
-            Zone and monster names come from the bot's <strong>“Export names to portal”</strong> button
-            (Recording tab). This panel can't force a refresh — re-run that button on a connected bot to
-            update the lists.
+          <Alert
+            severity="info"
+            sx={{ mb: 2 }}
+            action={
+              <Button
+                component="label" size="small" color="inherit"
+                startIcon={importing ? <CircularProgress size={16} color="inherit" /> : <CloudUploadIcon fontSize="small" />}
+                disabled={importing}
+              >
+                {importing ? 'Importing…' : 'Import names (JSON / CSV)'}
+                <input type="file" hidden accept=".json,.csv" onChange={handleImportNames} />
+              </Button>
+            }
+          >
+            Zone and monster names come from the bot's <strong>“Export names (JSON + CSV)”</strong> button,
+            which writes the lists to a local file. Import that <strong>names.json</strong> (or a
+            <code> zones.csv</code>/<code>mobs.csv</code>) here to update the reference lists — a JSON file
+            replaces both lists, a CSV replaces just the one it contains.
           </Alert>
 
           {/* Zone coverage table */}
@@ -971,9 +1005,9 @@ function ServerOverviewRow({ server }) {
 // Per-server reference-list overview (super-admin). Lists every tracked server;
 // expand one to see what's missing (name/data/bounds/background counts), a zone
 // coverage table (name / has_data / has_bounds / has_background), a searchable
-// monster-names table, and the reusable background-image controls. Names come
-// from the bot's "Export names to portal" button — this panel is read-only for
-// the lists and cannot force the bot to re-export.
+// monster-names table, and the reusable background-image controls. Names are
+// populated by importing the bot's locally-exported JSON/CSV file (via the
+// "Import names" button in the expanded body).
 function ServerOverviewPanel() {
   const { data, loading } = useApi(() => adminApi.getWorldServers(), []);
   const rows = data?.data || [];
@@ -984,7 +1018,8 @@ function ServerOverviewPanel() {
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
         Per-server zone &amp; monster reference names plus coverage. Expand a server to see what's
         missing, the per-zone coverage (name / data / bounds / background) and the monster-name list.
-        These lists are populated by the bot's <strong>“Export names to portal”</strong> button.
+        These lists are populated by importing the bot's exported <strong>JSON/CSV</strong> file
+        (the bot writes it locally via its <strong>“Export names (JSON + CSV)”</strong> button).
       </Typography>
 
       <Paper variant="outlined">

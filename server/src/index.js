@@ -72,14 +72,6 @@ app.use((req, _res, next) => {
 // ── Global Middleware ───────────────────────────────────────────────────────
 
 app.use(helmet({ contentSecurityPolicy: false })); // CSP breaks CDN scripts
-// Reference-list ingest (POST /api/bot/world/names) carries a REPLACE-ALL dump of
-// a server's zone + monster names — a few MB for a full mob-DB probe. Mount a
-// RAISED body parser for that exact path BEFORE the small-default global
-// express.json() below, so the large body is parsed here and never trips the
-// global 100KB cap (which would 413 before validateSpawnIngest/validate run).
-// validateSpawnIngest reads the header token, not the body, so auth still runs
-// first on the route itself.
-app.use('/api/bot/world/names', express.json({ limit: '24mb' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
