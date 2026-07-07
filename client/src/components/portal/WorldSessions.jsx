@@ -224,7 +224,7 @@ export default function WorldSessions() {
                         <TableCell>Renewed</TableCell>
                         <TableCell>Mobs</TableCell>
                         {hasRecordedBy && <TableCell>Recorded by</TableCell>}
-                        <TableCell align="right">Karte</TableCell>
+                        <TableCell align="right">Map</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
@@ -239,7 +239,7 @@ export default function WorldSessions() {
                           <TableCell sx={{ pr: 0 }}>
                             <IconButton
                               size="small"
-                              aria-label={isOpen ? 'Details ausblenden' : 'Details anzeigen'}
+                              aria-label={isOpen ? 'Hide details' : 'Show details'}
                               onClick={() => setExpandedKey(isOpen ? null : rowKey)}
                             >
                               {isOpen ? <KeyboardArrowDownIcon fontSize="small" /> : <KeyboardArrowRightIcon fontSize="small" />}
@@ -289,10 +289,10 @@ export default function WorldSessions() {
                             </TableCell>
                           )}
                           <TableCell align="right">
-                            <Tooltip title="Auf Karte zeigen">
+                            <Tooltip title="Show on map">
                               <IconButton
                                 size="small" color="primary"
-                                aria-label="Auf Karte zeigen"
+                                aria-label="Show on map"
                                 onClick={() => showOnMap(s.zone_no, s.version_id)}
                               >
                                 <MapIcon fontSize="small" />
@@ -489,14 +489,14 @@ function FiberDot({ color }) {
 }
 
 // Per-spot change badge (vs the previous session of the same zone).
-//   new           → green  'Neu'
-//   group_changed → amber  'Gruppe geändert'
-//   same          → muted  'unverändert'
+//   new           → green  'New'
+//   group_changed → amber  'Group changed'
+//   same          → muted  'Unchanged'
 function ChangeBadge({ change }) {
   const map = {
-    new:           { label: 'Neu',              color: 'success' },
-    group_changed: { label: 'Gruppe geändert',  color: 'warning' },
-    same:          { label: 'unverändert',      color: 'default' },
+    new:           { label: 'New',            color: 'success' },
+    group_changed: { label: 'Group changed',  color: 'warning' },
+    same:          { label: 'Unchanged',      color: 'default' },
   };
   const cfg = map[change] || map.same;
   return (
@@ -511,7 +511,7 @@ function ChangeBadge({ change }) {
 
 // Expanded session detail — lazily fetches worldApi.sessionDetail on mount and
 // renders per-MOB groups of renewed spots (center, group, hits, reliability) with
-// a per-spot change badge, plus a compact "Änderungen vs. vorher" summary.
+// a per-spot change badge, plus a compact "Changes vs. previous" summary.
 // Own loading / empty / error states, contained inside the expanded row.
 function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
   const [detail, setDetail]   = useState(null);
@@ -543,23 +543,23 @@ function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
 
   return (
     <Box sx={{ py: 1.5, pl: 1 }}>
-      {/* Änderungen vs. vorher — compact summary */}
+      {/* Changes vs. previous — compact summary */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center', mb: 1.5 }}>
         <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-          Änderungen vs. vorher:
+          Changes vs. previous:
         </Typography>
-        <Chip label={`+${summary.added ?? 0} neu`} size="small" color="success" variant="outlined" sx={{ height: 20 }} />
-        <Chip label={`−${summary.removed ?? 0} entfernt`} size="small" color="error" variant="outlined" sx={{ height: 20 }} />
-        <Chip label={`${summary.group_changed ?? 0} Gruppe geändert`} size="small" color="warning" variant="outlined" sx={{ height: 20 }} />
-        <Chip label={`${summary.same ?? 0} unverändert`} size="small" variant="outlined" sx={{ height: 20 }} />
+        <Chip label={`+${summary.added ?? 0} new`} size="small" color="success" variant="outlined" sx={{ height: 20 }} />
+        <Chip label={`−${summary.removed ?? 0} removed`} size="small" color="error" variant="outlined" sx={{ height: 20 }} />
+        <Chip label={`${summary.group_changed ?? 0} group changed`} size="small" color="warning" variant="outlined" sx={{ height: 20 }} />
+        <Chip label={`${summary.same ?? 0} unchanged`} size="small" variant="outlined" sx={{ height: 20 }} />
         <Typography variant="caption" color="text.disabled" sx={{ ml: 0.5 }}>
-          {prevId != null && prevId !== '' ? `vorherige Session: ${prevId}` : 'erste Session'}
+          {prevId != null && prevId !== '' ? `Previous session: ${prevId}` : 'First session'}
         </Typography>
       </Box>
 
       {mobs.length === 0 ? (
         <Typography variant="body2" color="text.disabled" sx={{ p: 1 }}>
-          Diese Session hat keine Spots erneuert.
+          This session renewed no spots.
         </Typography>
       ) : (
         mobs.map((mob) => (
@@ -576,12 +576,12 @@ function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
               <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Zentrum</TableCell>
-                    <TableCell>Gruppe</TableCell>
+                    <TableCell>Center</TableCell>
+                    <TableCell>Group</TableCell>
                     <TableCell>Hits</TableCell>
                     <TableCell>Reliab.</TableCell>
-                    <TableCell>Änderung</TableCell>
-                    <TableCell align="right">Karte</TableCell>
+                    <TableCell>Change</TableCell>
+                    <TableCell align="right">Map</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -607,10 +607,10 @@ function SessionDetail({ serverId, zoneNo, versionId, onShowOnMap }) {
                       </TableCell>
                       <TableCell><ChangeBadge change={sp.change} /></TableCell>
                       <TableCell align="right">
-                        <Tooltip title="Diesen Spot auf der Karte zeigen">
+                        <Tooltip title="Show this spot on the map">
                           <IconButton
                             size="small" color="primary"
-                            aria-label="Spot auf Karte zeigen"
+                            aria-label="Show spot on map"
                             onClick={() => onShowOnMap(zoneNo, versionId, [{
                               // MonsterMap matches highlights against cluster nodes in
                               // CELL units, so send the raw cell centroid (cell_x/cell_z)

@@ -9,6 +9,27 @@ const router = Router();
 
 // GET /api/admin/licenses — paginated list with user + live session count
 router.get('/', async (req, res) => {
+  // Additive ?all=1 short-circuit: a lean, un-paginated list for picker UIs.
+  // Returns ALL licenses (capped) with just the fields a picker needs, ordered
+  // by user name then newest license. Leaves the paginated path below untouched.
+  if (req.query.all !== undefined) {
+    const licenses = await db('licenses')
+      .leftJoin('users', 'licenses.user_id', 'users.id')
+      .select(
+        'licenses.license_key',
+        'licenses.user_id',
+        'users.name as user_name',
+        'users.email as user_email',
+        'licenses.active',
+      )
+      .orderBy([
+        { column: 'users.name', order: 'asc' },
+        { column: 'licenses.created_at', order: 'desc' },
+      ])
+      .limit(2000);
+    return res.json({ licenses });
+  }
+
   const page   = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const limit  = 25;
   const offset = (page - 1) * limit;

@@ -31,6 +31,7 @@ export const adminApi = {
 
   // Licenses
   getLicenses:    (page = 1)    => apiFetch(`/api/admin/licenses?page=${page}`),
+  getLicensesAll: ()            => apiFetch('/api/admin/licenses?all=1'),
   createLicense:  (data)        => apiFetch('/api/admin/licenses',                  { method: 'POST',  body: JSON.stringify(data) }),
   updateLicense:  (key, data)   => apiFetch(`/api/admin/licenses/${key}`,           { method: 'PATCH', body: JSON.stringify(data) }),
   extendLicense:  (key, data)   => apiFetch(`/api/admin/licenses/${key}/extend`,    { method: 'PATCH', body: JSON.stringify(data) }),

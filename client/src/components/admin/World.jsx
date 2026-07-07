@@ -3,7 +3,7 @@ import {
   Box, Typography, Button, TextField, Alert, Paper, Chip,
   Table, TableHead, TableRow, TableCell, TableBody, Tooltip, IconButton,
   Switch, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  Collapse, CircularProgress, Menu, MenuItem,
+  Collapse, CircularProgress, Menu, MenuItem, Autocomplete,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/VpnKey';
@@ -20,6 +20,67 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
 
 const fmtSec = (sec) => (sec ? new Date(sec * 1000).toLocaleString() : '—');
+
+// Human label for a license option in the picker: "<key> — <name||email||unassigned>"
+// (append the email in parens when both a name AND an email exist), and a muted
+// "(inactive)" suffix for revoked/inactive licenses.
+const licenseOptionLabel = (o) => {
+  if (!o) return '';
+  const who = o.user_name || o.user_email || 'unassigned';
+  const withEmail = o.user_name && o.user_email ? `${who} (${o.user_email})` : who;
+  return `${o.license_key} — ${withEmail}${o.active ? '' : ' (inactive)'}`;
+};
+
+// Shared license picker (MUI Autocomplete over getLicensesAll). Loads the license
+// list once when `active` flips true (dialog/panel opens), exposes loading + error
+// on the field, filters on the option label, and calls onPick(license_key|'') on
+// selection. The license_key is the anchor the mint signs with.
+function LicensePicker({ active, value, onPick, disabled }) {
+  const [options, setOptions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    setLoading(true); setError('');
+    adminApi.getLicensesAll()
+      .then((r) => { if (alive) setOptions(r?.licenses || []); })
+      .catch((err) => { if (alive) setError(err.data?.error || err.message || 'Failed to load licenses'); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [active]);
+
+  const selected = options.find((o) => o.license_key === value) || null;
+
+  return (
+    <Autocomplete
+      fullWidth size="small" disabled={disabled}
+      options={options} loading={loading} value={selected}
+      onChange={(_, opt) => onPick(opt ? opt.license_key : '')}
+      getOptionLabel={licenseOptionLabel}
+      isOptionEqualToValue={(o, v) => o.license_key === v.license_key}
+      noOptionsText={loading ? 'Loading…' : 'No licenses'}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          label="License (user)"
+          error={!!error}
+          helperText={error || 'Pick the user’s license — a recording key will be created for you to give them.'}
+          InputProps={{
+            ...params.InputProps,
+            endAdornment: (
+              <>
+                {loading ? <CircularProgress size={16} /> : null}
+                {params.InputProps.endAdornment}
+              </>
+            ),
+          }}
+        />
+      )}
+    />
+  );
+}
 
 // Per-row "Export CSV" control: a small menu offering whole-server all-time
 // (default) plus latest-version-only. Streams the admin-only CSV by opening the
@@ -59,7 +120,6 @@ function ExportCsvMenu({ serverId }) {
 function GrantRecordingKeyDialog({ open, onClose }) {
   const { showSnackbar } = useSnackbar();
   const [licenseKey, setLicenseKey]     = useState('');
-  const [userId, setUserId]             = useState('');
   const [durationHours, setDurationHours] = useState('6');
   const [minting, setMinting]           = useState(false);
   const [minted, setMinted]             = useState(null);   // { token, jti, expires_at }
@@ -70,24 +130,23 @@ function GrantRecordingKeyDialog({ open, onClose }) {
   // Reset transient state whenever the dialog is (re)opened.
   useEffect(() => {
     if (open) {
-      setLicenseKey(''); setUserId(''); setDurationHours('6');
+      setLicenseKey(''); setDurationHours('6');
       setMinting(false); setMinted(null); setError(''); setConflict(null); setRevoking(false);
     }
   }, [open]);
 
   const buildBody = () => {
-    const body = {};
-    if (licenseKey.trim()) body.license_key = licenseKey.trim();
-    else if (userId.trim()) body.user_id = Number(userId.trim());
-    else return null;
-    body.duration_hours = Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6));
-    return body;
+    if (!licenseKey) return null;
+    return {
+      license_key: licenseKey,
+      duration_hours: Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6)),
+    };
   };
 
   const handleMint = async () => {
     setError(''); setMinted(null); setConflict(null);
     const body = buildBody();
-    if (!body) { setError('Provide a license key or user id'); return; }
+    if (!body) { setError('Pick a license first'); return; }
     setMinting(true);
     try {
       const res = await adminApi.mintIngestToken(body);
@@ -148,17 +207,9 @@ function GrantRecordingKeyDialog({ open, onClose }) {
 
         {!minted && (
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <TextField
-              label="License Key" size="small" value={licenseKey} disabled={busy}
-              onChange={(e) => { setLicenseKey(e.target.value); if (e.target.value) setUserId(''); }}
-              placeholder="e.g. ABCD1234…" sx={{ minWidth: 200 }}
-            />
-            <Typography sx={{ pt: 1 }} color="text.disabled">or</Typography>
-            <TextField
-              label="User ID" size="small" value={userId} disabled={busy}
-              onChange={(e) => { setUserId(e.target.value); if (e.target.value) setLicenseKey(''); }}
-              placeholder="numeric" sx={{ minWidth: 110 }}
-            />
+            <Box sx={{ flex: 1, minWidth: 240 }}>
+              <LicensePicker active={open} value={licenseKey} onPick={setLicenseKey} disabled={busy} />
+            </Box>
             <TextField
               label="Window (hours)" size="small" type="number" value={durationHours} disabled={busy}
               onChange={(e) => setDurationHours(e.target.value)}
@@ -397,10 +448,10 @@ function ZoneMapRow({ serverId, zone, onMutated }) {
     setBusy(true);
     try {
       await adminApi.uploadZoneMap(serverId, zone.zone_no, file);
-      showSnackbar(`Hintergrund für Zone ${zone.zone_no} hochgeladen`);
+      showSnackbar(`Background for zone ${zone.zone_no} uploaded`);
       onMutated?.();
     } catch (err) {
-      showSnackbar(err.data?.error || err.message || 'Upload fehlgeschlagen', 'error');
+      showSnackbar(err.data?.error || err.message || 'Upload failed', 'error');
     } finally {
       setBusy(false);
     }
@@ -410,11 +461,11 @@ function ZoneMapRow({ serverId, zone, onMutated }) {
     setBusy(true);
     try {
       await adminApi.deleteZoneMap(serverId, zone.zone_no);
-      showSnackbar(`Hintergrund für Zone ${zone.zone_no} gelöscht`);
+      showSnackbar(`Background for zone ${zone.zone_no} deleted`);
       setConfirmDel(false);
       onMutated?.();
     } catch (err) {
-      showSnackbar(err.data?.error || err.message || 'Löschen fehlgeschlagen', 'error');
+      showSnackbar(err.data?.error || err.message || 'Delete failed', 'error');
     } finally {
       setBusy(false);
     }
@@ -433,14 +484,14 @@ function ZoneMapRow({ serverId, zone, onMutated }) {
               sx={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 0.5, border: '1px solid', borderColor: 'divider', bgcolor: 'rgba(0,0,0,0.2)' }}
             />
             <Box>
-              <Chip icon={<ImageIcon />} label="vorhanden" size="small" color="success" variant="outlined" />
+              <Chip icon={<ImageIcon />} label="present" size="small" color="success" variant="outlined" />
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
                 {zone.image?.orig_name || '—'}{zone.image?.byte_size != null ? ` · ${fmtBytes(zone.image.byte_size)}` : ''}
               </Typography>
             </Box>
           </Box>
         ) : (
-          <Chip label="Hintergrund fehlt" size="small" color="warning" variant="outlined" />
+          <Chip label="Background missing" size="small" color="warning" variant="outlined" />
         )}
       </TableCell>
       <TableCell align="right">
@@ -450,11 +501,11 @@ function ZoneMapRow({ serverId, zone, onMutated }) {
             component="label" size="small" variant="outlined"
             startIcon={<CloudUploadIcon fontSize="small" />} disabled={busy}
           >
-            {has ? 'Ersetzen' : 'Upload'}
+            {has ? 'Replace' : 'Upload'}
             <input type="file" hidden accept=".svg,.png" onChange={handleFile} />
           </Button>
           {has && (
-            <Tooltip title="Hintergrund löschen">
+            <Tooltip title="Delete background">
               <span>
                 <IconButton size="small" color="error" disabled={busy} onClick={() => setConfirmDel(true)}>
                   <DeleteIcon fontSize="small" />
@@ -465,17 +516,17 @@ function ZoneMapRow({ serverId, zone, onMutated }) {
         </Box>
 
         <Dialog open={confirmDel} onClose={() => !busy && setConfirmDel(false)}>
-          <DialogTitle>Hintergrund löschen?</DialogTitle>
+          <DialogTitle>Delete background?</DialogTitle>
           <DialogContent>
             <DialogContentText>
-              Der Hintergrund für <strong>Zone {zone.zone_no}</strong> wird gelöscht. Die
-              Spawn-Daten bleiben unberührt.
+              The background for <strong>Zone {zone.zone_no}</strong> will be deleted. The
+              spawn data is left untouched.
             </DialogContentText>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setConfirmDel(false)} disabled={busy}>Abbrechen</Button>
+            <Button onClick={() => setConfirmDel(false)} disabled={busy}>Cancel</Button>
             <Button color="error" variant="contained" onClick={handleDelete} disabled={busy}>
-              {busy ? 'Lösche…' : 'Löschen'}
+              {busy ? 'Deleting…' : 'Delete'}
             </Button>
           </DialogActions>
         </Dialog>
@@ -499,7 +550,7 @@ function BackgroundsServerRow({ server }) {
       const res = await adminApi.listZoneMaps(server.id);
       setZones(res?.data || []);
     } catch (err) {
-      setError(err.data?.error || err.message || 'Laden fehlgeschlagen');
+      setError(err.data?.error || err.message || 'Load failed');
       setZones([]);
     } finally {
       setLoading(false);
@@ -526,8 +577,8 @@ function BackgroundsServerRow({ server }) {
         <TableCell>{server.display_name || <Typography variant="caption" fontFamily="monospace">{server.ip}</Typography>}</TableCell>
         <TableCell align="right">
           {missing == null ? '—' : (missing === 0
-            ? <Chip label="alle vorhanden" size="small" color="success" variant="outlined" />
-            : <Chip label={`${missing} fehlen`} size="small" color="warning" variant="outlined" />)}
+            ? <Chip label="all present" size="small" color="success" variant="outlined" />
+            : <Chip label={`${missing} missing`} size="small" color="warning" variant="outlined" />)}
         </TableCell>
       </TableRow>
       <TableRow>
@@ -538,7 +589,7 @@ function BackgroundsServerRow({ server }) {
               {loading && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
               {!loading && zones && zones.length === 0 && (
                 <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>
-                  Keine gerahmten Zonen (zone_bounds) für diesen Server.
+                  No framed zones (zone_bounds) for this server.
                 </Typography>
               )}
               {!loading && zones && zones.length > 0 && (
@@ -573,12 +624,12 @@ function BackgroundsPanel() {
 
   return (
     <Box sx={{ mb: 5 }}>
-      <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>Monster Map — Hintergrundbilder</Typography>
+      <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>Monster Map — Background images</Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-        Lade pro Server und Zone <strong>ein Hintergrundbild</strong> (SVG bevorzugt, sonst PNG)
-        hoch. Es wird auf der User-Karte unter den Spawn-Punkten und exakt an den
-        <code> zone_bounds</code> ausgerichtet gezeichnet. Server aufklappen, um fehlende
-        Hintergründe zu sehen und Bilder hoch- oder herunterzuladen.
+        Upload <strong>one background image</strong> per server and zone (SVG preferred, otherwise
+        PNG). It is drawn on the user map beneath the spawn points and aligned exactly to the
+        <code> zone_bounds</code>. Expand a server to see missing backgrounds and upload or
+        replace images.
       </Typography>
 
       <Paper variant="outlined">
@@ -589,7 +640,7 @@ function BackgroundsPanel() {
                 <TableCell padding="checkbox" />
                 <TableCell>ID</TableCell>
                 <TableCell>Server</TableCell>
-                <TableCell align="right">Hintergründe</TableCell>
+                <TableCell align="right">Backgrounds</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -616,7 +667,6 @@ export default function World() {
 
   const { data, loading, refetch } = useApi(() => adminApi.getIngestTokens(), []);
   const [licenseKey, setLicenseKey] = useState('');
-  const [userId, setUserId]         = useState('');
   const [durationHours, setDurationHours] = useState('6');   // seeding window, default 6h (max 72)
   const [minting, setMinting]       = useState(false);
   const [minted, setMinted]         = useState(null);   // { token, jti, expires_at, duration_hours }
@@ -632,9 +682,8 @@ export default function World() {
     setMinting(true);
     try {
       const body = {};
-      if (licenseKey.trim()) body.license_key = licenseKey.trim();
-      else if (userId.trim()) body.user_id = Number(userId.trim());
-      else { setError('Provide a license key or user id'); setMinting(false); return; }
+      if (licenseKey) body.license_key = licenseKey;
+      else { setError('Pick a license first'); setMinting(false); return; }
       // Seeding window: clamp to [1, 72]h, default 6h if left blank/invalid.
       const h = Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6));
       body.duration_hours = h;
@@ -688,17 +737,9 @@ export default function World() {
         </Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <TextField
-            label="License Key" size="small" value={licenseKey}
-            onChange={(e) => { setLicenseKey(e.target.value); if (e.target.value) setUserId(''); }}
-            placeholder="e.g. ABCD1234…" sx={{ minWidth: 220 }}
-          />
-          <Typography sx={{ pt: 1 }} color="text.disabled">or</Typography>
-          <TextField
-            label="User ID" size="small" value={userId}
-            onChange={(e) => { setUserId(e.target.value); if (e.target.value) setLicenseKey(''); }}
-            placeholder="numeric" sx={{ minWidth: 120 }}
-          />
+          <Box sx={{ flex: 1, minWidth: 260 }}>
+            <LicensePicker active={isSuperAdmin} value={licenseKey} onPick={setLicenseKey} disabled={minting} />
+          </Box>
           <TextField
             label="Window (hours)" size="small" type="number" value={durationHours}
             onChange={(e) => setDurationHours(e.target.value)}

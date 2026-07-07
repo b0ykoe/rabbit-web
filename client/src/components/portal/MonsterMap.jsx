@@ -90,7 +90,7 @@ export default function MonsterMap() {
   const [hideSeenOnce, setHideSeenOnce] = useState(false);
   const RELIABILITY_MIN = 0.15;             // small threshold below which a spot is "unreliable"
 
-  // ── Deep-link from a recording session ("Auf Karte zeigen") ────────────────
+  // ── Deep-link from a recording session ("Show on map") ─────────────────────
   // WorldSessions navigates here with react-router state
   //   { serverId, zoneNo, versionId, highlightSpots:[{center_x,center_z,mob_id}] }.
   // We preselect that server, seed the highlighted mob(s) so the zone derives and
@@ -216,7 +216,7 @@ export default function MonsterMap() {
   }, [serverId, focusMob, channel]);
 
   // ── Load the map for the selected mobs in the zone + bounds ────────────────
-  // All-Time (version=all) → 8-neighbour CLUSTERS (packs). Neuste (version=latest)
+  // All-Time (version=all) → 8-neighbour CLUSTERS (packs). Latest (version=latest)
   // → newest-revision per-cell spots from the versioned spawns read, normalised
   // into the same {center_x/z, min/max, hits…} shape so one renderer serves both.
   useEffect(() => {
@@ -393,7 +393,7 @@ export default function MonsterMap() {
           severity="info" sx={{ mb: 2 }}
           onClose={() => { setHighlightSpots([]); setPendingZone(''); }}
         >
-          {highlightSpots.length} Spot(s) aus der gewählten Session sind hervorgehoben
+          {highlightSpots.length} spot(s) from the selected session are highlighted
           {navState?.versionId != null ? ` (Session ${navState.versionId})` : ''}.
         </Alert>
       )}
@@ -438,7 +438,7 @@ export default function MonsterMap() {
             onChange={(_, v) => { if (v) setVersion(v); }}
             sx={{ height: '100%' }}
           >
-            <ToggleButton value="latest">Neuste</ToggleButton>
+            <ToggleButton value="latest">Latest</ToggleButton>
             <ToggleButton value="all">All-Time</ToggleButton>
           </ToggleButtonGroup>
         </Grid>
@@ -595,7 +595,7 @@ export default function MonsterMap() {
                           onChange={(e) => setBgEnabled(e.target.checked)}
                         />
                       }
-                      label={<Typography variant="caption" color="text.secondary">Hintergrund</Typography>}
+                      label={<Typography variant="caption" color="text.secondary">Background</Typography>}
                     />
                   )}
                 </Box>
