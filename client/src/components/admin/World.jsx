@@ -3,7 +3,7 @@ import {
   Box, Typography, Button, TextField, Alert, Paper, Chip,
   Table, TableHead, TableRow, TableCell, TableBody, Tooltip, IconButton,
   Switch, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  Collapse, CircularProgress, Menu, MenuItem, Autocomplete,
+  Collapse, CircularProgress, Menu, MenuItem,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/VpnKey';
@@ -20,67 +20,6 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useSnackbar } from '../../context/SnackbarContext.jsx';
 
 const fmtSec = (sec) => (sec ? new Date(sec * 1000).toLocaleString() : '—');
-
-// Human label for a license option in the picker: "<key> — <name||email||unassigned>"
-// (append the email in parens when both a name AND an email exist), and a muted
-// "(inactive)" suffix for revoked/inactive licenses.
-const licenseOptionLabel = (o) => {
-  if (!o) return '';
-  const who = o.user_name || o.user_email || 'unassigned';
-  const withEmail = o.user_name && o.user_email ? `${who} (${o.user_email})` : who;
-  return `${o.license_key} — ${withEmail}${o.active ? '' : ' (inactive)'}`;
-};
-
-// Shared license picker (MUI Autocomplete over getLicensesAll). Loads the license
-// list once when `active` flips true (dialog/panel opens), exposes loading + error
-// on the field, filters on the option label, and calls onPick(license_key|'') on
-// selection. The license_key is the anchor the mint signs with.
-function LicensePicker({ active, value, onPick, disabled }) {
-  const [options, setOptions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-
-  useEffect(() => {
-    if (!active) return;
-    let alive = true;
-    setLoading(true); setError('');
-    adminApi.getLicensesAll()
-      .then((r) => { if (alive) setOptions(r?.licenses || []); })
-      .catch((err) => { if (alive) setError(err.data?.error || err.message || 'Failed to load licenses'); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [active]);
-
-  const selected = options.find((o) => o.license_key === value) || null;
-
-  return (
-    <Autocomplete
-      fullWidth size="small" disabled={disabled}
-      options={options} loading={loading} value={selected}
-      onChange={(_, opt) => onPick(opt ? opt.license_key : '')}
-      getOptionLabel={licenseOptionLabel}
-      isOptionEqualToValue={(o, v) => o.license_key === v.license_key}
-      noOptionsText={loading ? 'Loading…' : 'No licenses'}
-      renderInput={(params) => (
-        <TextField
-          {...params}
-          label="License (user)"
-          error={!!error}
-          helperText={error || 'Pick the user’s license — a recording key will be created for you to give them.'}
-          InputProps={{
-            ...params.InputProps,
-            endAdornment: (
-              <>
-                {loading ? <CircularProgress size={16} /> : null}
-                {params.InputProps.endAdornment}
-              </>
-            ),
-          }}
-        />
-      )}
-    />
-  );
-}
 
 // Per-row "Export CSV" control: a small menu offering whole-server all-time
 // (default) plus latest-version-only. Streams the admin-only CSV by opening the
@@ -119,7 +58,6 @@ function ExportCsvMenu({ serverId }) {
 // to revoke it (via the existing revoke endpoint) and retry.
 function GrantRecordingKeyDialog({ open, onClose }) {
   const { showSnackbar } = useSnackbar();
-  const [licenseKey, setLicenseKey]     = useState('');
   const [durationHours, setDurationHours] = useState('6');
   const [minting, setMinting]           = useState(false);
   const [minted, setMinted]             = useState(null);   // { token, jti, expires_at }
@@ -130,26 +68,21 @@ function GrantRecordingKeyDialog({ open, onClose }) {
   // Reset transient state whenever the dialog is (re)opened.
   useEffect(() => {
     if (open) {
-      setLicenseKey(''); setDurationHours('6');
+      setDurationHours('6');
       setMinting(false); setMinted(null); setError(''); setConflict(null); setRevoking(false);
     }
   }, [open]);
 
-  const buildBody = () => {
-    if (!licenseKey) return null;
-    return {
-      license_key: licenseKey,
-      duration_hours: Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6)),
-    };
-  };
+  const buildBody = () => ({
+    self: true,
+    duration_hours: Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6)),
+  });
 
   const handleMint = async () => {
     setError(''); setMinted(null); setConflict(null);
-    const body = buildBody();
-    if (!body) { setError('Pick a license first'); return; }
     setMinting(true);
     try {
-      const res = await adminApi.mintIngestToken(body);
+      const res = await adminApi.mintIngestToken(buildBody());
       setMinted(res);
       showSnackbar('Recording key minted');
     } catch (err) {
@@ -189,7 +122,7 @@ function GrantRecordingKeyDialog({ open, onClose }) {
       <DialogTitle>Grant recording key</DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
         <DialogContentText sx={{ fontSize: '0.8rem' }}>
-          Mints a short-lived <code>scope:ingest</code> token bound to a real active license.
+          Creates a time-limited recording key bound to you — hand it to a user.
           Paste it into a Debug bot's Scan tab to enable spawn upload. Shown <strong>once</strong> — copy it now.
         </DialogContentText>
         {error && (
@@ -207,9 +140,6 @@ function GrantRecordingKeyDialog({ open, onClose }) {
 
         {!minted && (
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <Box sx={{ flex: 1, minWidth: 240 }}>
-              <LicensePicker active={open} value={licenseKey} onPick={setLicenseKey} disabled={busy} />
-            </Box>
             <TextField
               label="Window (hours)" size="small" type="number" value={durationHours} disabled={busy}
               onChange={(e) => setDurationHours(e.target.value)}
@@ -242,7 +172,7 @@ function GrantRecordingKeyDialog({ open, onClose }) {
         <Button onClick={onClose} disabled={busy}>{minted ? 'Done' : 'Cancel'}</Button>
         {!minted && (
           <Button variant="contained" startIcon={<KeyIcon />} onClick={handleMint} disabled={busy}>
-            {minting ? 'Minting…' : 'Mint key'}
+            {minting ? 'Minting…' : 'Create key'}
           </Button>
         )}
       </DialogActions>
@@ -666,7 +596,6 @@ export default function World() {
   const isSuperAdmin = user?.role === 'super_admin';
 
   const { data, loading, refetch } = useApi(() => adminApi.getIngestTokens(), []);
-  const [licenseKey, setLicenseKey] = useState('');
   const [durationHours, setDurationHours] = useState('6');   // seeding window, default 6h (max 72)
   const [minting, setMinting]       = useState(false);
   const [minted, setMinted]         = useState(null);   // { token, jti, expires_at, duration_hours }
@@ -681,13 +610,9 @@ export default function World() {
     setMinted(null);
     setMinting(true);
     try {
-      const body = {};
-      if (licenseKey) body.license_key = licenseKey;
-      else { setError('Pick a license first'); setMinting(false); return; }
       // Seeding window: clamp to [1, 72]h, default 6h if left blank/invalid.
       const h = Math.min(72, Math.max(1, Math.floor(Number(durationHours)) || 6));
-      body.duration_hours = h;
-      const res = await adminApi.mintIngestToken(body);
+      const res = await adminApi.mintIngestToken({ self: true, duration_hours: h });
       setMinted(res);
       showSnackbar('Ingest token minted');
       refetch();
@@ -731,15 +656,12 @@ export default function World() {
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <Typography variant="subtitle2" sx={{ mb: 1 }}>Issue ingest token</Typography>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-          Signs a short-lived <code>scope:ingest</code> token against a real active license — the
-          seeding window defaults to <strong>6&nbsp;hours</strong> (max 72&nbsp;h). Paste it into a
-          Debug bot's Scan tab to enable spawn upload. Scope-limited, expiring, per-token revocable.
+          Creates a time-limited recording key bound to you — hand it to a user. The seeding window
+          defaults to <strong>6&nbsp;hours</strong> (max 72&nbsp;h). Paste it into a Debug bot's Scan
+          tab to enable spawn upload. Scope-limited, expiring, per-token revocable.
         </Typography>
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
         <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <Box sx={{ flex: 1, minWidth: 260 }}>
-            <LicensePicker active={isSuperAdmin} value={licenseKey} onPick={setLicenseKey} disabled={minting} />
-          </Box>
           <TextField
             label="Window (hours)" size="small" type="number" value={durationHours}
             onChange={(e) => setDurationHours(e.target.value)}
@@ -748,7 +670,7 @@ export default function World() {
             sx={{ minWidth: 130 }}
           />
           <Button variant="contained" startIcon={<KeyIcon />} onClick={handleMint} disabled={minting}>
-            {minting ? 'Minting…' : 'Mint'}
+            {minting ? 'Minting…' : 'Create key'}
           </Button>
         </Box>
 

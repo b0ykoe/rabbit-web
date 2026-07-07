@@ -236,13 +236,16 @@ export const versionQuerySchema = z.object({
 
 // ── Admin: Monster-map ingest tokens (world) ─────────────────────────────────
 export const ingestTokenMintSchema = z.object({
+  // SELF path: bind the token to the REQUESTING super_admin (no user/license
+  // selection). When true, user_id/license_key may be omitted entirely.
+  self:        z.boolean().optional(),
   user_id:     z.coerce.number().int().positive().optional(),
   license_key: z.string().min(1).max(32).optional(),
   // Seeding-key window: default 6h (short-lived), hard-capped at 72h. Threaded
   // into the token exp + the issued_ingest_tokens.expires_at so both stay coherent.
   duration_hours: z.coerce.number().int().min(1).max(72).optional().default(6),
-}).refine(d => d.user_id != null || d.license_key, {
-  message: 'Provide user_id or license_key',
+}).refine(d => d.self === true || d.user_id != null || d.license_key, {
+  message: 'Provide self, user_id, or license_key',
 });
 
 // ── Admin: Monster-map per-server management (world) ──────────────────────────

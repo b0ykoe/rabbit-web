@@ -38,6 +38,10 @@ function RecordingCard() {
   const enabled = !!rec?.spawn_tracking;
   const keys = tokens?.data || [];
 
+  // Only surface the Recording card to users with spawn_tracking on
+  // (super_admins read true). Otherwise render nothing at all.
+  if (!enabled) return null;
+
   return (
     <Box sx={{ mb: 4 }}>
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -45,12 +49,8 @@ function RecordingCard() {
       </Typography>
       <Paper sx={{ p: 2.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <FiberManualRecordIcon sx={{ fontSize: 10, color: enabled ? 'success.main' : 'text.disabled' }} />
-          {enabled ? (
-            <Typography variant="body2" color="success.main" fontWeight={600}>Recording: Enabled</Typography>
-          ) : (
-            <Typography variant="body2" color="text.disabled">Not enabled — contact an admin</Typography>
-          )}
+          <FiberManualRecordIcon sx={{ fontSize: 10, color: 'success.main' }} />
+          <Typography variant="body2" color="success.main" fontWeight={600}>Recording: Enabled</Typography>
         </Box>
 
         {keys.length > 0 && (

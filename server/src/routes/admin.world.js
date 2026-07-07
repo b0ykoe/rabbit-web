@@ -25,6 +25,7 @@ import { config } from '../config.js';
 import { signToken, generateJti } from '../crypto/ed25519.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
+import { generateKey } from '../services/licenseService.js';
 import { validate, ingestTokenMintSchema, serverUpdateSchema } from '../validation/schemas.js';
 
 const router = Router();
@@ -99,13 +100,42 @@ function nowSec() { return Math.floor(Date.now() / 1000); }
 
 // POST /api/admin/world/ingest-token — mint a scoped ingest token.
 router.post('/ingest-token', requireSuperAdmin, validate(ingestTokenMintSchema), async (req, res) => {
-  const { user_id, license_key, duration_hours } = req.validated;
+  const { self, user_id, license_key, duration_hours } = req.validated;
 
-  // Resolve a real, active license: either directly by key, or the user's
-  // first active license. The token MUST carry a valid license `key` + its
-  // current token_version so the live-token checks stay coherent.
+  // SELF path when explicitly requested OR when neither selector is given: the
+  // token binds to the REQUESTING super_admin (the route is already super-admin
+  // gated), so a GM can mint many distribution tokens under their own identity
+  // WITHOUT picking a user/license. The explicit user_id/license_key path below
+  // keeps its exact behavior (resolution + 1-active-token cap) unchanged.
+  const isSelf = self === true || (user_id == null && !license_key);
+
+  // Resolve a real, active license: SELF → the admin's own first active license
+  // (auto-created if none); else directly by key, or the target user's first
+  // active license. The token MUST carry a valid license `key` + its current
+  // token_version so the live-token checks stay coherent.
   let license;
-  if (license_key) {
+  if (isSelf) {
+    const adminUserId = req.session.user.id;
+    license = await db('licenses')
+      .where({ user_id: adminUserId, active: true })
+      .orderBy('created_at', 'asc')
+      .first();
+    // No active license for this admin → AUTO-CREATE a minimal one so the
+    // recording service always has a coherent key/token_version to sign against.
+    if (!license) {
+      const key = generateKey();
+      await db('licenses').insert({
+        license_key:  key,
+        user_id:      adminUserId,
+        max_sessions: 1,
+        active:       true,
+        note:         'recording service (auto)',
+        expires_at:   null,
+        // token_version left to its column default.
+      });
+      license = await db('licenses').where({ license_key: key }).first();
+    }
+  } else if (license_key) {
     license = await db('licenses').where({ license_key, active: true }).first();
   } else {
     license = await db('licenses')
@@ -124,7 +154,10 @@ router.post('/ingest-token', requireSuperAdmin, validate(ingestTokenMintSchema),
   // Keyed on the resolved license.user_id (server-side identity), matching the
   // validateSpawnIngest live-row check. A license with a NULL user_id (orphan)
   // skips the cap — there is no user identity to rate-limit against.
-  if (license.user_id != null) {
+  //
+  // SELF path is EXEMPT from the cap: the admin mints MANY distribution tokens,
+  // so a single-active-token limit would be wrong here.
+  if (!isSelf && license.user_id != null) {
     const activeToken = await db('issued_ingest_tokens')
       .where({ user_id: license.user_id, revoked: false })
       .andWhere('expires_at', '>', nowSec())
