@@ -15,7 +15,7 @@ import { worldApi } from '../../api/endpoints.js';
 // ZONES that mob appears in via /mobs/:id/spawns, pick a zone, then render the
 // zone's CLUSTERS (8-neighbour packs) as an SVG heat map. A cell is 4 m; world =
 // origin + cell*4, framed by /zones/:z/bounds when present (else auto-fit).
-// Controls: version (latest / all-time), channel, and a mob checklist filter.
+// Controls: version (latest / all-time) and a mob checklist filter.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CELL_M = 4;          // metres per cell (fixed by ingest quantisation)
@@ -65,8 +65,6 @@ export default function MonsterMap() {
   const [selectedMobs, setSelectedMobs] = useState(new Set()); // mob_id checklist
   const [focusMob, setFocusMob] = useState(null);              // mob used for zone derivation
 
-  const [channels, setChannels] = useState([]);
-  const [channel, setChannel]   = useState('all');
   const [version, setVersion]   = useState('latest');          // 'latest' | 'all'
 
   const [zones, setZones]       = useState([]);                // [zone_no,...]
@@ -158,21 +156,11 @@ export default function MonsterMap() {
     return () => { alive = false; clearTimeout(t); };
   }, [serverId, mobQuery]);
 
-  // ── Channels for the server ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!serverId) { setChannels([]); return; }
-    let alive = true;
-    worldApi.channels(serverId)
-      .then((r) => { if (alive) setChannels(r.data || []); })
-      .catch(() => { if (alive) setChannels([]); });
-    return () => { alive = false; };
-  }, [serverId]);
-
   // Reset downstream selections whenever the server changes (manual pick).
   const onServerChange = (id) => {
     setServerId(id);
     setMobQuery(''); setMobs([]); setSelectedMobs(new Set()); setFocusMob(null);
-    setChannel('all'); setZones([]); setZoneNo(''); setClusters([]); setBounds(null);
+    setZones([]); setZoneNo(''); setClusters([]); setBounds(null);
     setMapError('');
     // A manual server pick drops any deep-link highlight/pending zone.
     setHighlightSpots([]); setPendingZone('');
@@ -201,8 +189,7 @@ export default function MonsterMap() {
     if (!serverId || focusMob == null) { setZones([]); setZoneNo(''); return; }
     let alive = true;
     setLoadingZones(true);
-    const chan = channel === 'all' ? undefined : channel;
-    worldApi.mobSpawns(serverId, focusMob, { channel: chan })
+    worldApi.mobSpawns(serverId, focusMob)
       .then((r) => {
         if (!alive) return;
         const zs = Object.keys(r.zones || {}).map((z) => parseInt(z, 10))
@@ -213,7 +200,7 @@ export default function MonsterMap() {
       .catch(() => { if (alive) { setZones([]); setZoneNo(''); } })
       .finally(() => { if (alive) setLoadingZones(false); });
     return () => { alive = false; };
-  }, [serverId, focusMob, channel]);
+  }, [serverId, focusMob]);
 
   // ── Load the map for the selected mobs in the zone + bounds ────────────────
   // All-Time (version=all) → 8-neighbour CLUSTERS (packs). Latest (version=latest)
@@ -226,7 +213,6 @@ export default function MonsterMap() {
     let alive = true;
     setLoadingMap(true);
     setMapError('');
-    const chan = channel === 'all' ? undefined : channel;
     const mobIds = [...selectedMobs];
 
     // Zone bounds are additive/optional — a 404 just means we auto-fit.
@@ -238,14 +224,14 @@ export default function MonsterMap() {
     if (version === 'all') {
       // Connected-cell packs per mob (clusters require a mob_id server-side).
       dataP = Promise.all(mobIds.map((mid) =>
-        worldApi.zoneClusters(serverId, zoneNo, { mob_id: mid, channel: chan })
+        worldApi.zoneClusters(serverId, zoneNo, { mob_id: mid })
           .then((r) => (r.data || []).map((c) => ({ ...c, mob_id: mid })))
           .catch(() => []),
       )).then((lists) => lists.flat());
     } else {
       // Newest-revision per-cell spots → wrap each cell as a single-cell pack.
       dataP = Promise.all(mobIds.map((mid) =>
-        worldApi.zoneSpawns(serverId, zoneNo, { version: 'latest', mob_id: mid, channel: chan })
+        worldApi.zoneSpawns(serverId, zoneNo, { version: 'latest', mob_id: mid })
           .then((r) => (r.data || []).map((s) => ({
             mob_id: mid,
             cells: 1,
@@ -269,7 +255,7 @@ export default function MonsterMap() {
       .catch((e) => { if (alive) setMapError(e.data?.error || e.message || 'Failed to load map'); })
       .finally(() => { if (alive) setLoadingMap(false); });
     return () => { alive = false; };
-  }, [serverId, zoneNo, channel, version, selectedMobs]);
+  }, [serverId, zoneNo, version, selectedMobs]);
 
   // When the (server, zone) target changes, re-arm the background layer: assume it
   // may exist and let <image onError> decide, and restore the default-ON toggle.
@@ -374,8 +360,7 @@ export default function MonsterMap() {
         || highlightKeys.has(`|${cx}|${cz}`);
   }, [highlightKeys]);
 
-  const serverLabel = (s) =>
-    s.display_name || `${s.ip}${s.variant != null ? ` (v${s.variant})` : ''}`;
+  const serverLabel = (s) => s.name || `Server #${s.id}`;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -400,7 +385,7 @@ export default function MonsterMap() {
 
       {/* Top controls */}
       <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} sm={4}>
+        <Grid item xs={12} sm={5}>
           <TextField
             select fullWidth size="small" label="Server"
             value={serverId} onChange={(e) => onServerChange(e.target.value)}
@@ -412,7 +397,7 @@ export default function MonsterMap() {
             ))}
           </TextField>
         </Grid>
-        <Grid item xs={6} sm={3}>
+        <Grid item xs={6} sm={4}>
           <TextField
             select fullWidth size="small" label="Zone"
             value={zoneNo} onChange={(e) => setZoneNo(e.target.value)}
@@ -423,16 +408,6 @@ export default function MonsterMap() {
           </TextField>
         </Grid>
         <Grid item xs={6} sm={3}>
-          <TextField
-            select fullWidth size="small" label="Channel"
-            value={channel} onChange={(e) => setChannel(e.target.value)}
-            disabled={!serverId}
-          >
-            <MenuItem value="all">All channels</MenuItem>
-            {channels.map((c) => <MenuItem key={c} value={String(c)}>Ch {c}</MenuItem>)}
-          </TextField>
-        </Grid>
-        <Grid item xs={12} sm={2}>
           <ToggleButtonGroup
             size="small" exclusive value={version}
             onChange={(_, v) => { if (v) setVersion(v); }}

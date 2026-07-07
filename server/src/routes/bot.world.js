@@ -105,30 +105,110 @@ async function requireSpawnTracking(req, res) {
   return userId;
 }
 
-// Upsert (find or create) the game server for (ip, variant); refresh port +
-// last_seen. Returns the numeric server id.
-async function upsertGameServer(server) {
-  const now = nowSec();
-  const existing = await db('game_servers')
-    .where({ ip: server.ip, variant: server.variant })
-    .first();
-  if (existing) {
-    const updates = { last_seen: now };
-    if (server.port) updates.port = server.port;
-    await db('game_servers').where('id', existing.id).update(updates);
-    return existing.id;
+// Resolve the effective server_id for an ingest body (034 named-server model).
+// Servers are ADMIN-DEFINED now — the bot never auto-creates one. Resolution
+// order:
+//   1. validated.server_id present → verify it exists in game_servers; else null
+//      (the caller decides the HTTP status: 404/422 on a hard-required path,
+//      null-tolerant on session/start).
+//   2. else validated.server{ip,variant} hint present → resolve WITHOUT creating:
+//        a. game_server_hosts.ip == server.ip → its server_id (host-map wins)
+//        b. else a game_servers row with variant == server.variant (MIN id)
+//        c. else null (no matching admin-defined server)
+//   3. else null.
+// Returns { id, notFound } where notFound is true ONLY when a server_id was
+// explicitly supplied but does not exist (so the caller can 404/422); a hint
+// that fails to resolve returns { id: null, notFound: false }.
+async function resolveServerId(validated) {
+  if (validated.server_id != null) {
+    const row = await db('game_servers').where('id', validated.server_id).select('id').first();
+    return { id: row ? row.id : null, notFound: !row };
   }
-  const [id] = await db('game_servers').insert({
-    ip:           server.ip,
-    variant:      server.variant,
-    port:         server.port || null,
-    display_name: null,
-    visible:      false,
-    first_seen:   now,
-    last_seen:    now,
-  });
-  return id;
+
+  const server = validated.server;
+  if (server && server.ip) {
+    // (a) host-map: an admin has registered this exact game socket IP.
+    const host = await db('game_server_hosts')
+      .where('ip', server.ip)
+      .select('server_id')
+      .first();
+    if (host) return { id: host.server_id, notFound: false };
+  }
+  if (server && server.variant) {
+    // (b) fall back to the MIN-id server for this variant (post-034 fold there
+    // is one row per variant, so this is deterministic).
+    const byVariant = await db('game_servers')
+      .where('variant', server.variant)
+      .min('id as id')
+      .first();
+    if (byVariant && byVariant.id != null) return { id: byVariant.id, notFound: false };
+  }
+  return { id: null, notFound: false };
 }
+
+// ── GET /servers ─────────────────────────────────────────────────────────────
+// Bot-facing server directory (034). The bot fetches this to populate its
+// Server dropdown and to PRESELECT by (variant, ip). Auth = the SAME ingest
+// middleware as POST /spawns (token via Authorization: Bearer header since a GET
+// carries no body) + the spawn_tracking gate.
+//
+//   Query (optional): ip=<str> variant=<str>
+//   200 → { servers: [ { server_id, name, variant, known_ips:[...] } ],
+//           preselect_server_id: <int|null> }
+//
+// Only visible=true servers are returned. preselect: rows whose variant ==
+// query.variant AND that own query.ip in game_server_hosts. EXACTLY one match →
+// its server_id; zero or ≥2 → null.
+router.get('/servers',
+  validateSpawnIngest,
+  async (req, res) => {
+    const userId = await requireSpawnTracking(req, res);
+    if (userId == null) return;
+
+    const qIp      = typeof req.query.ip === 'string' ? req.query.ip.trim() : '';
+    const qVariant = typeof req.query.variant === 'string' ? req.query.variant.trim() : '';
+
+    // Visible servers only.
+    const servers = await db('game_servers')
+      .where('visible', true)
+      .select('id', 'name', 'variant', 'display_name')
+      .orderBy('name', 'asc')
+      .limit(500);
+
+    // Flatten known IPs per server (game_server_hosts). One grouped read, then
+    // fan out into per-server lists so a server with no hosts still returns [].
+    const ipsByServer = new Map();
+    if (servers.length) {
+      const ids = servers.map(s => s.id);
+      const hostRows = await db('game_server_hosts')
+        .whereIn('server_id', ids)
+        .whereNotNull('ip')
+        .select('server_id', 'ip');
+      for (const h of hostRows) {
+        if (!ipsByServer.has(h.server_id)) ipsByServer.set(h.server_id, []);
+        ipsByServer.get(h.server_id).push(h.ip);
+      }
+    }
+
+    const out = servers.map(s => ({
+      server_id: s.id,
+      // name is the admin label; fall back to display_name then a synthetic tag.
+      name:      s.name || s.display_name || `Server #${s.id}`,
+      variant:   s.variant,
+      known_ips: ipsByServer.get(s.id) || [],
+    }));
+
+    // Preselect: exactly-one server whose variant matches AND owns qIp.
+    let preselectServerId = null;
+    if (qVariant && qIp) {
+      const matches = out.filter(
+        s => s.variant === qVariant && s.known_ips.includes(qIp),
+      );
+      if (matches.length === 1) preselectServerId = matches[0].server_id;
+    }
+
+    res.json({ servers: out, preselect_server_id: preselectServerId });
+  });
 
 // ── POST /spawns ─────────────────────────────────────────────────────────────
 router.post('/spawns',
@@ -138,9 +218,21 @@ router.post('/spawns',
     const userId = await requireSpawnTracking(req, res);
     if (userId == null) return;
 
-    const { server, zone_no, sightings, session_id } = req.validated;
+    const { zone_no, sightings, session_id } = req.validated;
     const now = nowSec();
-    const serverId = await upsertGameServer(server);
+
+    // Resolve the admin-defined named server (034). A supplied-but-unknown
+    // server_id hard-fails (404); a missing/unresolvable hint is a 400 — ingest
+    // requires a real server row (the bot HARD-BLOCKS recording until one is
+    // selected, so a live upload always carries a resolvable identity).
+    const resolved = await resolveServerId(req.validated);
+    if (resolved.notFound) {
+      return res.status(404).json({ error: 'Unknown server_id' });
+    }
+    const serverId = resolved.id;
+    if (serverId == null) {
+      return res.status(400).json({ error: 'Could not resolve server (provide server_id)' });
+    }
 
     // ── Resolve the effective session_id (null-tolerant) ────────────────────
     // A batch may carry a backend session_id (033). We stamp it on the
@@ -175,7 +267,10 @@ router.post('/spawns',
       // [A2] drop unusable/unresolved mob ids — never key on <=0.
       if (!Number.isInteger(s.mob_id) || s.mob_id <= 0) continue;
 
-      const channel = Number.isInteger(s.channel) ? s.channel : 0;
+      // 034: the channel dimension is REMOVED — every cell collapses to channel 0.
+      // s.channel (if the bot still sends it) is IGNORED here so all data lands in
+      // the single agnostic bucket. netid dedup still uses a per-cell scope.
+      const channel = 0;
 
       // Prefer the bot's pre-quantized cell (origin-relative [B1]) so bot + portal
       // grids align; fall back to floor(x/4) only for legacy bots that omit it.
@@ -462,7 +557,16 @@ router.post('/zone-bounds',
 
     const b = req.validated;
     const now = nowSec();
-    const serverId = await upsertGameServer(b.server);
+
+    // Resolve the admin-defined named server (034); same hard contract as /spawns.
+    const resolved = await resolveServerId(b);
+    if (resolved.notFound) {
+      return res.status(404).json({ error: 'Unknown server_id' });
+    }
+    const serverId = resolved.id;
+    if (serverId == null) {
+      return res.status(400).json({ error: 'Could not resolve server (provide server_id)' });
+    }
 
     await db('zone_bounds')
       .insert({
@@ -512,12 +616,19 @@ router.post('/session/start',
     const { server, zone_no, run_id } = req.validated;
     const now = nowSec();
 
-    // Snapshot the server if the bot knew it; else leave server_id/ip/variant NULL.
-    let serverId = null;
+    // Resolve the admin-defined named server (034) — NULL-TOLERANT here: a
+    // session may open before the bot knows/selects a server. A supplied-but-
+    // unknown server_id still hard-fails so a bad id is never silently dropped;
+    // a missing/unresolvable hint just leaves serverId null. The ip/variant
+    // snapshot comes from the optional server{} hint when present.
+    const resolved = await resolveServerId(req.validated);
+    if (resolved.notFound) {
+      return res.status(404).json({ error: 'Unknown server_id' });
+    }
+    const serverId = resolved.id;   // may be null (no server yet)
     let ip = null;
     let variant = null;
     if (server) {
-      serverId = await upsertGameServer(server);
       ip = server.ip;
       variant = server.variant;
     }

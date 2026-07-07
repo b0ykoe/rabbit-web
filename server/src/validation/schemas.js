@@ -190,11 +190,18 @@ export const spawnSightingSchema = z.object({
 
 export const spawnIngestSchema = z.object({
   token:  z.string().optional(),                   // consumed by validateSpawnIngest, ignored here
+  // Admin-defined NAMED server (034). When present it is the AUTHORITATIVE
+  // identity — the route resolves it directly to a game_servers.id and ignores
+  // the ip/variant hint for keying. Positive int.
+  server_id: z.coerce.number().int().positive().optional(),
+  // Legacy ip/variant hint — now OPTIONAL. Used ONLY as a fallback resolve
+  // (game_server_hosts.ip → variant MIN(id)) when server_id is absent, and as
+  // a scan_sessions ip/variant snapshot. port is vestigial.
   server: z.object({
     ip:      z.string().min(1).max(45),
     variant: z.string().min(1).max(32),
     port:    z.string().max(8).optional(),
-  }),
+  }).optional(),
   zone_no:   z.number().int().min(0).max(65535),
   sightings: z.array(spawnSightingSchema).min(1).max(200),
   // Backend-issued recording session (033). When present + valid + owned, every
@@ -216,6 +223,9 @@ export const spawnIngestSchema = z.object({
 //     optional + server-clamped to [started, now].
 export const sessionStartSchema = z.object({
   token:  z.string().optional(),                   // consumed by validateSpawnIngest, ignored here
+  // Admin-defined NAMED server (034). Optional — a Debug-with-key start may not
+  // know the server yet; when present the session snapshots it, else null.
+  server_id: z.coerce.number().int().positive().optional(),
   server: z.object({
     ip:      z.string().min(1).max(45),
     variant: z.string().min(1).max(32),
@@ -237,11 +247,14 @@ export const sessionStopSchema = z.object({
 
 export const zoneBoundsSchema = z.object({
   token:  z.string().optional(),
+  // Admin-defined NAMED server (034). Authoritative when present; the ip/variant
+  // hint is now OPTIONAL and used only as a fallback resolve.
+  server_id: z.coerce.number().int().positive().optional(),
   server: z.object({
     ip:      z.string().min(1).max(45),
     variant: z.string().min(1).max(32),
     port:    z.string().max(8).optional(),
-  }),
+  }).optional(),
   zone_no:          z.number().int().min(0).max(65535),
   origin_x:         z.number(),
   origin_z:         z.number(),
@@ -285,15 +298,34 @@ export const ingestTokenMintSchema = z.object({
 });
 
 // ── Admin: Monster-map per-server management (world) ──────────────────────────
-// PATCH /api/admin/world/servers/:id — edit display_name and/or visible. Both
-// fields are optional so a caller can flip just one; at least one must be
-// present. display_name is a trimmed string (≤128) or an explicit null to clear.
+// POST /api/admin/world/servers — create an admin-defined NAMED server (034).
+// name + variant are required; visible defaults false (publish is an explicit
+// follow-up). known_ips seeds game_server_hosts so the bot can preselect this
+// server by its game socket IP.
+export const serverCreateSchema = z.object({
+  name:      z.string().min(1).max(128),
+  variant:   z.string().min(1).max(32),
+  visible:   z.boolean().optional(),
+  known_ips: z.array(z.string().min(1).max(45)).optional(),
+});
+
+// PATCH /api/admin/world/servers/:id — edit name/variant/visible and/or add or
+// remove known IPs (034). Every field optional so a caller can flip just one;
+// at least one must be present. display_name kept for back-compat. name/variant
+// are trimmed (name ≤128, variant ≤32); display_name may be an explicit null to
+// clear. add_ips/remove_ips mutate game_server_hosts for this server.
 export const serverUpdateSchema = z.object({
   display_name: z.string().max(128).nullable().optional(),
+  name:         z.string().max(128).optional(),
+  variant:      z.string().max(32).optional(),
   visible:      z.boolean().optional(),
-}).refine(d => d.display_name !== undefined || d.visible !== undefined, {
-  message: 'Provide display_name and/or visible',
-});
+  add_ips:      z.array(z.string().min(1).max(45)).optional(),
+  remove_ips:   z.array(z.string().min(1).max(45)).optional(),
+}).refine(
+  d => d.display_name !== undefined || d.name !== undefined || d.variant !== undefined
+    || d.visible !== undefined || d.add_ips !== undefined || d.remove_ips !== undefined,
+  { message: 'Provide at least one field to update' },
+);
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

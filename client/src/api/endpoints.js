@@ -74,8 +74,12 @@ export const adminApi = {
   mintIngestToken:   (data)  => apiFetch('/api/admin/world/ingest-token', { method: 'POST', body: JSON.stringify(data) }),
   revokeIngestToken: (jti)   => apiFetch(`/api/admin/world/ingest-token/${encodeURIComponent(jti)}`, { method: 'DELETE' }),
 
-  // Monster-map server management (super-admin) — additive
+  // Monster-map server management (super-admin) — additive.
+  // Servers are ADMIN-DEFINED named entities (server_id). createWorldServer takes
+  // { name, variant, visible?, known_ips? }; updateWorldServer accepts any of
+  // { name, variant, visible, display_name, add_ips, remove_ips }.
   getWorldServers:   ()          => apiFetch('/api/admin/world/servers'),
+  createWorldServer: (data)      => apiFetch('/api/admin/world/servers', { method: 'POST', body: JSON.stringify(data) }),
   updateWorldServer: (id, data)  => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}`, { method: 'PATCH',  body: JSON.stringify(data) }),
   deleteWorldServer: (id)        => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
@@ -119,9 +123,6 @@ export const worldApi = {
     const qs = q ? `?${new URLSearchParams({ q }).toString()}` : '';
     return apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/mobs${qs}`);
   },
-
-  // Distinct channel numbers seen for a server.
-  channels:  (sid)   => apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/channels`),
 
   // All zones where a given mob spawns → { mob_id, zones:{ "<zone_no>":[...] }, total_cells }.
   // Used to derive the zone list for a selected mob. opts: { channel }.

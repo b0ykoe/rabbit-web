@@ -26,7 +26,7 @@ import { signToken, generateJti } from '../crypto/ed25519.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
-import { validate, ingestTokenMintSchema, serverUpdateSchema } from '../validation/schemas.js';
+import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -255,10 +255,11 @@ router.delete('/ingest-token/:jti', requireSuperAdmin, async (req, res) => {
 // ingest-token routes are untouched.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// GET /api/admin/world/servers — ALL servers (incl. hidden) with coverage counts.
+// GET /api/admin/world/servers — ALL servers (incl. hidden) with coverage counts
+// and their known IPs (034 game_server_hosts).
 router.get('/servers', requireSuperAdmin, async (req, res) => {
   const servers = await db('game_servers')
-    .select('id', 'ip', 'variant', 'port', 'display_name', 'visible', 'first_seen', 'last_seen')
+    .select('id', 'name', 'ip', 'variant', 'port', 'display_name', 'visible', 'first_seen', 'last_seen')
     .orderBy('last_seen', 'desc')
     .limit(500);
 
@@ -266,7 +267,8 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     const ids = servers.map(s => s.id);
     // Coverage counts so the admin sees what data a server carries before
     // publishing or deleting it: distinct mobs, spawn cells, and total sightings.
-    const [mobCounts, cellCounts] = await Promise.all([
+    // known_ips (034) lists the game socket IPs registered for each server.
+    const [mobCounts, cellCounts, hostRows] = await Promise.all([
       db('mob_catalog').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as mob_count')),
@@ -277,22 +279,88 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
           db.raw('COUNT(*) as cell_count'),
           db.raw('SUM(`hits`) as sightings_total'),
         ),
+      db('game_server_hosts').whereIn('server_id', ids)
+        .whereNotNull('ip')
+        .select('server_id', 'ip'),
     ]);
     const mobMap  = Object.fromEntries(mobCounts.map(c => [c.server_id, Number(c.mob_count)]));
     const cellMap = Object.fromEntries(cellCounts.map(c => [c.server_id, c]));
+    const ipsMap  = new Map();
+    for (const h of hostRows) {
+      if (!ipsMap.has(h.server_id)) ipsMap.set(h.server_id, []);
+      ipsMap.get(h.server_id).push(h.ip);
+    }
     for (const s of servers) {
       const cc = cellMap[s.id];
       s.visible         = !!s.visible;   // normalize mysql2 0/1
       s.mob_count       = mobMap[s.id]  || 0;
       s.cell_count      = cc ? Number(cc.cell_count) : 0;
       s.sightings_total = cc ? Number(cc.sightings_total || 0) : 0;
+      s.known_ips       = ipsMap.get(s.id) || [];
     }
   }
 
   res.json({ data: servers });
 });
 
-// PATCH /api/admin/world/servers/:id — edit display_name and/or visible.
+// POST /api/admin/world/servers — create an admin-defined NAMED server (034).
+// name + variant required; visible defaults false. known_ips seed
+// game_server_hosts (deduped on the UNIQUE(ip) — a duplicate IP is skipped).
+router.post('/servers', requireSuperAdmin, validate(serverCreateSchema), async (req, res) => {
+  const { name, variant, visible, known_ips } = req.validated;
+  const now = nowSec();
+
+  const trimmedName = name.trim();
+  const trimmedVariant = variant.trim();
+  if (!trimmedName || !trimmedVariant) {
+    return res.status(422).json({ error: 'name and variant are required' });
+  }
+
+  const serverId = await db.transaction(async (trx) => {
+    const [id] = await trx('game_servers').insert({
+      name:         trimmedName,
+      // ip/variant/port are vestigial (034) — variant kept for legacy resolve;
+      // ip left null (the host-map owns per-server IPs now).
+      ip:           null,
+      variant:      trimmedVariant,
+      port:         null,
+      display_name: trimmedName,
+      visible:      visible === true,
+      first_seen:   now,
+      last_seen:    now,
+    });
+
+    // Seed known IPs; dedupe on the game_server_hosts UNIQUE(ip). A collision
+    // (an IP already owned by another server) is skipped, not an error.
+    const seedIps = Array.isArray(known_ips)
+      ? [...new Set(known_ips.map(ip => (ip || '').trim()).filter(Boolean))]
+      : [];
+    for (const ip of seedIps) {
+      const exists = await trx('game_server_hosts').where('ip', ip).select('id').first();
+      if (exists) continue;
+      await trx('game_server_hosts').insert({ server_id: id, ip, port: null });
+    }
+    return id;
+  });
+
+  const row = await db('game_servers').where('id', serverId).first();
+  row.visible = !!row.visible;
+  const ips = await db('game_server_hosts')
+    .where('server_id', serverId).whereNotNull('ip').pluck('ip');
+  row.known_ips = ips;
+
+  await recordAudit(db, req, {
+    action: 'world.server.create', subjectType: 'game_server', subjectId: String(serverId),
+    newValues: { name: trimmedName, variant: trimmedVariant, visible: row.visible, known_ips: ips },
+  });
+
+  res.status(201).json({ data: row });
+});
+
+// PATCH /api/admin/world/servers/:id — edit name/variant/display_name/visible
+// and/or add or remove known IPs (034). Any single field is enough (schema
+// refine). IP mutations touch game_server_hosts; an add that collides with an
+// IP already owned elsewhere (UNIQUE(ip)) is skipped rather than 500ing.
 router.patch('/servers/:id', requireSuperAdmin, validate(serverUpdateSchema), async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad server id' });
@@ -305,16 +373,54 @@ router.patch('/servers/:id', requireSuperAdmin, validate(serverUpdateSchema), as
     const dn = req.validated.display_name;
     patch.display_name = dn == null ? null : dn.trim() || null;
   }
+  if (req.validated.name !== undefined) {
+    patch.name = req.validated.name.trim() || null;
+  }
+  if (req.validated.variant !== undefined) {
+    patch.variant = req.validated.variant.trim() || existing.variant;
+  }
   if (req.validated.visible !== undefined) patch.visible = req.validated.visible;
 
-  await db('game_servers').where('id', id).update(patch);
+  const addIps = Array.isArray(req.validated.add_ips)
+    ? [...new Set(req.validated.add_ips.map(ip => (ip || '').trim()).filter(Boolean))]
+    : [];
+  const removeIps = Array.isArray(req.validated.remove_ips)
+    ? [...new Set(req.validated.remove_ips.map(ip => (ip || '').trim()).filter(Boolean))]
+    : [];
+
+  await db.transaction(async (trx) => {
+    if (Object.keys(patch).length) {
+      await trx('game_servers').where('id', id).update(patch);
+    }
+    for (const ip of addIps) {
+      const owner = await trx('game_server_hosts').where('ip', ip).select('server_id').first();
+      if (owner) {
+        // Already registered — only insert-skip when it's a foreign owner; a
+        // re-add to THIS server is a no-op either way.
+        continue;
+      }
+      await trx('game_server_hosts').insert({ server_id: id, ip, port: null });
+    }
+    if (removeIps.length) {
+      await trx('game_server_hosts')
+        .where('server_id', id)
+        .whereIn('ip', removeIps)
+        .del();
+    }
+  });
+
   const row = await db('game_servers').where('id', id).first();
   row.visible = !!row.visible;
+  row.known_ips = await db('game_server_hosts')
+    .where('server_id', id).whereNotNull('ip').pluck('ip');
 
   await recordAudit(db, req, {
     action: 'world.server.update', subjectType: 'game_server', subjectId: String(id),
-    oldValues: { display_name: existing.display_name, visible: !!existing.visible },
-    newValues: patch,
+    oldValues: {
+      name: existing.name, variant: existing.variant,
+      display_name: existing.display_name, visible: !!existing.visible,
+    },
+    newValues: { ...patch, add_ips: addIps, remove_ips: removeIps },
   });
 
   res.json({ data: row });
@@ -338,6 +444,8 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
     c.mob_spawn_cells         = await trx('mob_spawn_cells').where('server_id', id).del();
     c.mob_catalog             = await trx('mob_catalog').where('server_id', id).del();
     c.zone_bounds             = await trx('zone_bounds').where('server_id', id).del();
+    // 034: also purge the server's registered host IPs.
+    c.game_server_hosts       = await trx('game_server_hosts').where('server_id', id).del();
     c.game_servers            = await trx('game_servers').where('id', id).del();
     return c;
   });

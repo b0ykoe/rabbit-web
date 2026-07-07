@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
 import {
-  Box, Typography, Button, TextField, Alert, Paper, Chip,
+  Box, Typography, Button, TextField, Alert, Paper, Chip, Stack,
   Table, TableHead, TableRow, TableCell, TableBody, Tooltip, IconButton,
-  Switch, Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
-  Collapse, CircularProgress, Menu, MenuItem,
+  Switch, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogContentText,
+  DialogActions, Collapse, CircularProgress, Menu, MenuItem,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/VpnKey';
-import SaveIcon from '@mui/icons-material/Save';
+import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import ImageIcon from '@mui/icons-material/Image';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
@@ -180,37 +181,163 @@ function GrantRecordingKeyDialog({ open, onClose }) {
   );
 }
 
+// Known variant labels for the server form's variant picker. Free-text on the
+// server (VARCHAR 32), so 'Custom…' keeps a raw entry possible.
+const VARIANT_OPTIONS = ['EP4 Stock', 'Nemesis', 'Unknown'];
+
+// Create / edit a named game server. In CREATE mode collects name, variant,
+// visible + an initial known-IPs list (POST create). In EDIT mode saves
+// name/variant/visible and diffs the IP list into add_ips/remove_ips (PATCH).
+// Servers are ADMIN-DEFINED — identity is the name, not the ip/variant.
+function ServerFormDialog({ open, server, onClose, onSaved }) {
+  const { showSnackbar } = useSnackbar();
+  const isEdit = !!server;
+
+  const [name, setName]       = useState('');
+  const [variant, setVariant] = useState(VARIANT_OPTIONS[0]);
+  const [visible, setVisible] = useState(false);
+  const [ips, setIps]         = useState([]);      // current known-IP list
+  const [ipDraft, setIpDraft] = useState('');      // the add-IP text field
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState('');
+
+  // (Re)seed the form whenever it opens or the target server changes.
+  useEffect(() => {
+    if (!open) return;
+    setName(server?.name || server?.display_name || '');
+    setVariant(server?.variant || VARIANT_OPTIONS[0]);
+    setVisible(!!server?.visible);
+    setIps(Array.isArray(server?.known_ips) ? [...server.known_ips] : []);
+    setIpDraft('');
+    setError('');
+    setSaving(false);
+  }, [open, server]);
+
+  const addIp = () => {
+    const v = ipDraft.trim();
+    if (!v) return;
+    setIps((prev) => (prev.includes(v) ? prev : [...prev, v]));
+    setIpDraft('');
+  };
+
+  const removeIp = (ip) => setIps((prev) => prev.filter((x) => x !== ip));
+
+  const handleSave = async () => {
+    const nm = name.trim();
+    if (!nm) { setError('Name is required.'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      if (isEdit) {
+        // Diff the IP list against the server's original known_ips.
+        const orig = Array.isArray(server.known_ips) ? server.known_ips : [];
+        const add_ips    = ips.filter((x) => !orig.includes(x));
+        const remove_ips = orig.filter((x) => !ips.includes(x));
+        const body = { name: nm, variant, visible };
+        if (add_ips.length) body.add_ips = add_ips;
+        if (remove_ips.length) body.remove_ips = remove_ips;
+        await adminApi.updateWorldServer(server.id, body);
+        showSnackbar('Server updated');
+      } else {
+        await adminApi.createWorldServer({ name: nm, variant, visible, known_ips: ips });
+        showSnackbar('Server created');
+      }
+      onSaved?.();
+      onClose();
+    } catch (err) {
+      setError(err.data?.error || err.message || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={() => !saving && onClose()} maxWidth="sm" fullWidth>
+      <DialogTitle>{isEdit ? `Edit server #${server.id}` : 'New server'}</DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '8px !important' }}>
+        <DialogContentText sx={{ fontSize: '0.8rem' }}>
+          Servers are admin-defined. The bot preselects one by matching a known IP;
+          spawn data is keyed by this server.
+        </DialogContentText>
+        {error && <Alert severity="error">{error}</Alert>}
+
+        <TextField
+          label="Name" size="small" value={name} disabled={saving} autoFocus
+          onChange={(e) => setName(e.target.value)}
+          inputProps={{ maxLength: 128 }} fullWidth
+        />
+        <TextField
+          select label="Variant" size="small" value={variant} disabled={saving}
+          onChange={(e) => setVariant(e.target.value)} fullWidth
+        >
+          {VARIANT_OPTIONS.map((v) => <MenuItem key={v} value={v}>{v}</MenuItem>)}
+        </TextField>
+        <FormControlLabel
+          control={<Switch checked={visible} disabled={saving} onChange={(e) => setVisible(e.target.checked)} />}
+          label="Visible on user map"
+        />
+
+        <Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            Known IPs — used to preselect this server for a connecting bot.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+            <TextField
+              size="small" placeholder="1.2.3.4" value={ipDraft} disabled={saving}
+              onChange={(e) => setIpDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addIp(); } }}
+              fullWidth
+            />
+            <Button
+              variant="outlined" size="small" startIcon={<AddIcon fontSize="small" />}
+              onClick={addIp} disabled={saving || !ipDraft.trim()}
+            >
+              Add
+            </Button>
+          </Box>
+          {ips.length === 0 ? (
+            <Typography variant="caption" color="text.disabled">No known IPs yet.</Typography>
+          ) : (
+            <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
+              {ips.map((ip) => (
+                <Chip
+                  key={ip} label={ip} size="small" variant="outlined"
+                  onDelete={saving ? undefined : () => removeIp(ip)}
+                  sx={{ fontFamily: 'monospace' }}
+                />
+              ))}
+            </Stack>
+          )}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button variant="contained" onClick={handleSave} disabled={saving || !name.trim()}>
+          {saving ? 'Saving…' : (isEdit ? 'Save' : 'Create')}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // ── Servers management (super-admin) ──────────────────────────────────────────
-// Additive: list every tracked game_server, edit its public display_name, toggle
-// visible (whether it surfaces on the user map), and destructively delete a
+// Additive: list every ADMIN-DEFINED game server, create/edit it (name, variant,
+// visible, known-IPs list), export its spawn CSV, and destructively delete a
 // server + ALL its spawn data. Wraps the admin.world.js server-mgmt endpoints.
 function ServersPanel() {
   const { showSnackbar } = useSnackbar();
   const { data, loading, refetch } = useApi(() => adminApi.getWorldServers(), []);
-  const [names, setNames]     = useState({});   // { [id]: editedDisplayName }
-  const [savingId, setSavingId] = useState(null);
   const [togglingId, setTogglingId] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null); // server row pending delete
   const [deleting, setDeleting] = useState(false);
   const [grantOpen, setGrantOpen] = useState(false);  // "Grant recording key" dialog
+  const [formOpen, setFormOpen]   = useState(false);   // create/edit server dialog
+  const [editServer, setEditServer] = useState(null);  // row being edited (null = create)
 
   const rows = data?.data || [];
 
-  const nameFor = (r) => (names[r.id] !== undefined ? names[r.id] : (r.display_name || ''));
-
-  const handleSaveName = async (r) => {
-    setSavingId(r.id);
-    try {
-      await adminApi.updateWorldServer(r.id, { display_name: nameFor(r) });
-      showSnackbar('Display name saved');
-      setNames((m) => { const n = { ...m }; delete n[r.id]; return n; });
-      refetch();
-    } catch (err) {
-      showSnackbar(err.data?.error || err.message || 'Save failed', 'error');
-    } finally {
-      setSavingId(null);
-    }
-  };
+  const openCreate = () => { setEditServer(null); setFormOpen(true); };
+  const openEdit   = (r) => { setEditServer(r); setFormOpen(true); };
 
   const handleToggleVisible = async (r) => {
     setTogglingId(r.id);
@@ -244,18 +371,26 @@ function ServersPanel() {
     <Box sx={{ mb: 5 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2, mb: 1 }}>
         <Typography variant="h6" fontWeight={600}>Monster Map — Servers</Typography>
-        <Button
-          size="small" variant="outlined" startIcon={<KeyIcon fontSize="small" />}
-          onClick={() => setGrantOpen(true)}
-        >
-          Grant recording key
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            size="small" variant="contained" startIcon={<AddIcon fontSize="small" />}
+            onClick={openCreate}
+          >
+            New server
+          </Button>
+          <Button
+            size="small" variant="outlined" startIcon={<KeyIcon fontSize="small" />}
+            onClick={() => setGrantOpen(true)}
+          >
+            Grant recording key
+          </Button>
+        </Box>
       </Box>
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
-        Every tracked game server. Set a public <strong>display name</strong>, toggle
-        {' '}<strong>Visible</strong> to publish/hide a server on the user map, export its
-        {' '}<strong>spawn CSV</strong>, or delete a server together with all of its collected
-        spawn data.
+        Admin-defined game servers. Create a server with a <strong>name</strong>, a
+        {' '}<strong>variant</strong> and its <strong>known IPs</strong> (used to preselect it for a
+        connecting bot), toggle <strong>Visible</strong> to publish/hide it on the user map, export
+        its <strong>spawn CSV</strong>, or delete a server together with all of its collected spawn data.
       </Typography>
 
       <Paper variant="outlined">
@@ -264,10 +399,9 @@ function ServersPanel() {
             <TableHead>
               <TableRow>
                 <TableCell>ID</TableCell>
-                <TableCell>IP</TableCell>
+                <TableCell sx={{ minWidth: 160 }}>Name</TableCell>
                 <TableCell>Variant</TableCell>
-                <TableCell>Port</TableCell>
-                <TableCell sx={{ minWidth: 220 }}>Display name</TableCell>
+                <TableCell sx={{ minWidth: 200 }}>Known IPs</TableCell>
                 <TableCell align="center">Visible</TableCell>
                 <TableCell align="right">Mobs</TableCell>
                 <TableCell align="right">Cells</TableCell>
@@ -276,34 +410,31 @@ function ServersPanel() {
               </TableRow>
             </TableHead>
             <TableBody>
-              {loading && <TableRow><TableCell colSpan={10}>Loading…</TableCell></TableRow>}
+              {loading && <TableRow><TableCell colSpan={9}>Loading…</TableCell></TableRow>}
               {!loading && rows.length === 0 && (
-                <TableRow><TableCell colSpan={10}><Typography variant="caption" color="text.disabled">No servers tracked yet.</Typography></TableCell></TableRow>
+                <TableRow><TableCell colSpan={9}><Typography variant="caption" color="text.disabled">No servers tracked yet.</Typography></TableCell></TableRow>
               )}
               {rows.map((r) => {
-                const dirty = names[r.id] !== undefined && names[r.id] !== (r.display_name || '');
+                const knownIps = Array.isArray(r.known_ips) ? r.known_ips : [];
                 return (
                   <TableRow key={r.id}>
                     <TableCell>{r.id}</TableCell>
-                    <TableCell><Typography variant="caption" fontFamily="monospace">{r.ip}</Typography></TableCell>
-                    <TableCell>{r.variant ?? '—'}</TableCell>
-                    <TableCell>{r.port ?? '—'}</TableCell>
                     <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <TextField
-                          size="small" value={nameFor(r)} placeholder="(unnamed)"
-                          onChange={(e) => setNames((m) => ({ ...m, [r.id]: e.target.value }))}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && dirty) handleSaveName(r); }}
-                          sx={{ minWidth: 180 }}
-                        />
-                        <Tooltip title="Save display name">
-                          <span>
-                            <IconButton size="small" disabled={!dirty || savingId === r.id} onClick={() => handleSaveName(r)}>
-                              <SaveIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      </Box>
+                      <Typography variant="body2" fontWeight={600}>
+                        {r.name || <Typography component="span" variant="caption" color="text.disabled">(unnamed)</Typography>}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>{r.variant ?? '—'}</TableCell>
+                    <TableCell>
+                      {knownIps.length === 0 ? (
+                        <Typography variant="caption" color="text.disabled">—</Typography>
+                      ) : (
+                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                          {knownIps.map((ip) => (
+                            <Chip key={ip} label={ip} size="small" variant="outlined" sx={{ fontFamily: 'monospace', height: 20 }} />
+                          ))}
+                        </Box>
+                      )}
                     </TableCell>
                     <TableCell align="center">
                       <Switch
@@ -316,6 +447,11 @@ function ServersPanel() {
                     <TableCell><Typography variant="caption" color="text.secondary">{fmtSec(r.last_seen)}</Typography></TableCell>
                     <TableCell align="right">
                       <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                        <Tooltip title="Edit server">
+                          <IconButton size="small" onClick={() => openEdit(r)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
                         <ExportCsvMenu serverId={r.id} />
                         <Tooltip title="Delete server + all spawn data">
                           <IconButton size="small" color="error" onClick={() => setConfirmDel(r)}>
@@ -337,7 +473,7 @@ function ServersPanel() {
         <DialogContent>
           <DialogContentText>
             This permanently deletes server{' '}
-            <strong>{confirmDel?.display_name || confirmDel?.ip}</strong>{' '}
+            <strong>{confirmDel?.name || `#${confirmDel?.id}`}</strong>{' '}
             (#{confirmDel?.id}) and <strong>all of its collected spawn data</strong> — mob
             catalog, spawn cells, versions and zone bounds. This cannot be undone.
           </DialogContentText>
@@ -351,6 +487,13 @@ function ServersPanel() {
       </Dialog>
 
       <GrantRecordingKeyDialog open={grantOpen} onClose={() => setGrantOpen(false)} />
+
+      <ServerFormDialog
+        open={formOpen}
+        server={editServer}
+        onClose={() => setFormOpen(false)}
+        onSaved={refetch}
+      />
     </Box>
   );
 }
@@ -504,7 +647,7 @@ function BackgroundsServerRow({ server }) {
           </IconButton>
         </TableCell>
         <TableCell>{server.id}</TableCell>
-        <TableCell>{server.display_name || <Typography variant="caption" fontFamily="monospace">{server.ip}</Typography>}</TableCell>
+        <TableCell>{server.name || server.display_name || `Server #${server.id}`}</TableCell>
         <TableCell align="right">
           {missing == null ? '—' : (missing === 0
             ? <Chip label="all present" size="small" color="success" variant="outlined" />

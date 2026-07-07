@@ -43,8 +43,7 @@ function freshnessColor(sec) {
   return 'error.main';
 }
 
-const serverLabel = (s) =>
-  s.display_name || `${s.ip}${s.variant != null ? ` (v${s.variant})` : ''}`;
+const serverLabel = (s) => s.name || `Server #${s.id}`;
 
 export default function WorldSessions() {
   const navigate = useNavigate();

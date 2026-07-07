@@ -295,7 +295,9 @@ async function handleVersionedSpawns({ res, serverId, zoneNo, mobId, channel, ig
 router.get('/servers', async (req, res) => {
   const servers = await db('game_servers')
     .where('visible', true)
-    .select('id', 'ip', 'variant', 'port', 'display_name', 'first_seen', 'last_seen')
+    // name (034) is the admin label the client renders; keep ip/variant/port as
+    // trivial fallbacks so an unnamed legacy row can still be labelled.
+    .select('id', 'name', 'ip', 'variant', 'port', 'display_name', 'first_seen', 'last_seen')
     .orderBy('last_seen', 'desc')
     .limit(200);
 
@@ -382,18 +384,10 @@ router.get('/:serverId/zones/:zoneNo/spawns', async (req, res) => {
   const version = parseVersionParam(req.query.version);
   if (version == null) return res.status(400).json({ error: 'Bad version' });
 
-  const applyChannelFilter = (qb) => {
-    if (channel != null) {
-      // `= N OR = 0` — include the agnostic/legacy bucket alongside the
-      // requested channel [FIX]. NOT `IS NULL` (there are no NULLs).
-      qb.where(function () {
-        this.where('channel', channel).orWhere('channel', 0);
-      });
-    }
-    if (ignoreChannels.length) {
-      qb.whereNotIn('channel', ignoreChannels);
-    }
-  };
+  // 034: the channel dimension is REMOVED — data is always channel 0. The
+  // ?channel / ?ignore_channels query params are now INERT (accepted for
+  // back-compat, never filtered on) so every read spans all channels.
+  const applyChannelFilter = (_qb) => { /* no-op — channel collapsed to 0 */ };
 
   // ── Versioned read (?version=latest | <number>) ─────────────────────────────
   // Serves from mob_spawn_cell_versions instead of the all-time mob_spawn_cells.
@@ -410,23 +404,37 @@ router.get('/:serverId/zones/:zoneNo/spawns', async (req, res) => {
   }
 
   if (mobId != null) {
-    // Single-mob path — per-cell rows, hard LIMIT safety net [E6]. Return the
-    // raw counters + computed reliability/typical_group/density_score so the
-    // client can rank and grey low-confidence cells.
+    // Single-mob path — per-cell rows, hard LIMIT safety net [E6]. 034: roll up
+    // by CELL (GROUP BY cell_x, cell_z) so any residual pre-fold per-channel
+    // rows collapse to one row per cell; SUM the additive counters and recompute
+    // reliability/typical_group/density_score from the sums.
     const q = db('mob_spawn_cells')
       .where({ server_id: serverId, zone_no: zoneNo, mob_id: mobId });
     applyChannelFilter(q);
     const rows = await q
-      .select('mob_id', 'cell_x', 'cell_z', 'channel', 'y_avg', 'hits', 'passes', 'instance_sum', 'last_seen_sec')
-      .select(db.raw(`${REL_EXPR}     as reliability`))
-      .select(db.raw(`${GROUP_EXPR}   as typical_group`))
-      .select(db.raw(`${DENSITY_EXPR} as density_score`))
-      .orderBy('density_score', 'desc')
+      .select('cell_x', 'cell_z')
+      .select(db.raw('SUM(`hits`) as hits'))
+      .select(db.raw('SUM(`passes`) as passes'))
+      .select(db.raw('SUM(`instance_sum`) as instance_sum'))
+      .select(db.raw('AVG(y_avg) as y_avg'))
+      .select(db.raw('MAX(last_seen_sec) as last_seen_sec'))
+      .select(db.raw(`${REL_AGG}     as reliability`))
+      .select(db.raw(`${GROUP_AGG}   as typical_group`))
+      .select(db.raw(`${DENSITY_AGG} as density_score`))
+      .groupBy('cell_x', 'cell_z')
+      .orderByRaw(`${DENSITY_AGG} DESC`)
       .limit(CELL_LIMIT);
     return res.json({
       mode: 'mob', mob_id: mobId,
       data: rows.map(r => ({
         ...r,
+        mob_id:        mobId,
+        // channel is collapsed — echo 0 so older clients that read r.channel
+        // still get a stable value.
+        channel:       0,
+        hits:          Number(r.hits),
+        passes:        Number(r.passes),
+        instance_sum:  Number(r.instance_sum),
         reliability:   Number(r.reliability),
         typical_group: Number(r.typical_group),
         density_score: Number(r.density_score),
@@ -435,7 +443,7 @@ router.get('/:serverId/zones/:zoneNo/spawns', async (req, res) => {
   }
 
   // No mob_id → collapsed density: aggregate per cell across mobs, ranked by
-  // the summed density_score [E2].
+  // the summed density_score [E2]. Already grouped by cell only (no channel).
   const q = db('mob_spawn_cells')
     .where({ server_id: serverId, zone_no: zoneNo });
   applyChannelFilter(q);
@@ -471,20 +479,29 @@ router.get('/:serverId/mobs/:mobId/spawns', async (req, res) => {
   const mobId    = intParam(req.params.mobId);
   if (serverId == null || mobId == null) return res.status(400).json({ error: 'Bad serverId/mobId' });
 
-  const channel = intParam(req.query.channel);
+  // 034: channel is INERT (accepted, never filtered) and the data is rolled up
+  // by CELL (GROUP BY zone_no, cell_x, cell_z) so any residual per-channel rows
+  // collapse to one row per cell; SUM the additive counters.
   const q = db('mob_spawn_cells')
     .where({ server_id: serverId, mob_id: mobId });
-  if (channel != null) {
-    q.where(function () { this.where('channel', channel).orWhere('channel', 0); });
-  }
   const rows = (await q
-    .select('zone_no', 'cell_x', 'cell_z', 'channel', 'y_avg', 'hits', 'passes', 'instance_sum', 'last_seen_sec')
-    .select(db.raw(`${REL_EXPR}     as reliability`))
-    .select(db.raw(`${GROUP_EXPR}   as typical_group`))
-    .select(db.raw(`${DENSITY_EXPR} as density_score`))
-    .orderBy('density_score', 'desc')
+    .select('zone_no', 'cell_x', 'cell_z')
+    .select(db.raw('SUM(`hits`) as hits'))
+    .select(db.raw('SUM(`passes`) as passes'))
+    .select(db.raw('SUM(`instance_sum`) as instance_sum'))
+    .select(db.raw('AVG(y_avg) as y_avg'))
+    .select(db.raw('MAX(last_seen_sec) as last_seen_sec'))
+    .select(db.raw(`${REL_AGG}     as reliability`))
+    .select(db.raw(`${GROUP_AGG}   as typical_group`))
+    .select(db.raw(`${DENSITY_AGG} as density_score`))
+    .groupBy('zone_no', 'cell_x', 'cell_z')
+    .orderByRaw(`${DENSITY_AGG} DESC`)
     .limit(CELL_LIMIT)).map(r => ({
       ...r,
+      channel:       0,   // collapsed — stable echo for older clients
+      hits:          Number(r.hits),
+      passes:        Number(r.passes),
+      instance_sum:  Number(r.instance_sum),
       reliability:   Number(r.reliability),
       typical_group: Number(r.typical_group),
       density_score: Number(r.density_score),
@@ -510,24 +527,36 @@ router.get('/:serverId/zones/:zoneNo/clusters', async (req, res) => {
 
   const mobId    = intParam(req.query.mob_id);
   if (mobId == null) return res.status(400).json({ error: 'mob_id required for clusters' });
-  const channel  = intParam(req.query.channel);
   const minCount = Math.max(1, intParam(req.query.min_count, 1));
 
-  const q = db('mob_spawn_cells')
+  // 034: channel is INERT and cells roll up by CELL (GROUP BY cell_x, cell_z)
+  // so any residual per-channel rows collapse to one cell before the flood-fill;
+  // the min_count gate now applies to the SUMmed hits (HAVING).
+  const cells = await db('mob_spawn_cells')
     .where({ server_id: serverId, zone_no: zoneNo, mob_id: mobId })
-    .where('hits', '>=', minCount);   // min_count gates on hits (times seen)
-  if (channel != null) {
-    q.where(function () { this.where('channel', channel).orWhere('channel', 0); });
-  }
-  // Bound the scan set fed to the O(n) flood-fill. Carry the v2 counters so each
-  // pack can report a summed reliability/typical_group/density_score.
-  const cells = await q
-    .select('cell_x', 'cell_z', 'hits', 'passes', 'instance_sum', 'y_avg')
-    .orderBy('hits', 'desc')
+    .select('cell_x', 'cell_z')
+    .select(db.raw('SUM(`hits`) as hits'))
+    .select(db.raw('SUM(`passes`) as passes'))
+    .select(db.raw('SUM(`instance_sum`) as instance_sum'))
+    .select(db.raw('AVG(y_avg) as y_avg'))
+    .groupBy('cell_x', 'cell_z')
+    .havingRaw('SUM(`hits`) >= ?', [minCount])   // min_count gates on total hits
+    .orderByRaw('SUM(`hits`) DESC')
     .limit(CLUSTER_CELL_SCAN);
 
+  // SUM()/AVG() come back as strings from mysql2 — coerce to numbers before the
+  // flood-fill (agglomerateCells does numeric arithmetic on these fields).
+  const normCells = cells.map(c => ({
+    cell_x:       c.cell_x,
+    cell_z:       c.cell_z,
+    hits:         Number(c.hits),
+    passes:       Number(c.passes),
+    instance_sum: Number(c.instance_sum),
+    y_avg:        c.y_avg == null ? null : Number(c.y_avg),
+  }));
+
   // 8-neighbour flood fill over the sparse cell set (shared helper).
-  const clusters = agglomerateCells(cells);
+  const clusters = agglomerateCells(normCells);
 
   // Densest packs first, capped.
   clusters.sort((a, b) => b.density_score - a.density_score);
