@@ -313,9 +313,11 @@ export async function up(knex) {
           `INSERT INTO zone_bounds
              (server_id, zone_no, origin_x, origin_z, world_min_x, world_min_z,
               world_max_x, world_max_z, size_px, meters_per_pixel, cell_size_m, updated_at)
-             SELECT ?, zone_no, origin_x, origin_z, world_min_x, world_min_z,
-                    world_max_x, world_max_z, size_px, meters_per_pixel, cell_size_m, updated_at
-               FROM zone_bounds WHERE server_id = ?
+             SELECT * FROM (
+               SELECT ?, zone_no, origin_x, origin_z, world_min_x, world_min_z,
+                      world_max_x, world_max_z, size_px, meters_per_pixel, cell_size_m, updated_at
+                 FROM zone_bounds WHERE server_id = ?
+             ) AS dt
            ON DUPLICATE KEY UPDATE zone_no = zone_bounds.zone_no`,
           [survivorId, srcId]
         );
@@ -325,9 +327,11 @@ export async function up(knex) {
           `INSERT INTO zone_maps
              (server_id, zone_no, format, file_name, orig_name, content_type,
               byte_size, width, height, uploaded_by, uploaded_at)
-             SELECT ?, zone_no, format, file_name, orig_name, content_type,
-                    byte_size, width, height, uploaded_by, uploaded_at
-               FROM zone_maps WHERE server_id = ?
+             SELECT * FROM (
+               SELECT ?, zone_no, format, file_name, orig_name, content_type,
+                      byte_size, width, height, uploaded_by, uploaded_at
+                 FROM zone_maps WHERE server_id = ?
+             ) AS dt
            ON DUPLICATE KEY UPDATE zone_no = zone_maps.zone_no`,
           [survivorId, srcId]
         );
