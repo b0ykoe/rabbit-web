@@ -12,6 +12,7 @@ import SensorsIcon from '@mui/icons-material/Sensors';
 import HistoryIcon from '@mui/icons-material/History';
 import AnnouncementIcon from '@mui/icons-material/Announcement';
 import PublicIcon from '@mui/icons-material/Public';
+import FiberSmartRecordIcon from '@mui/icons-material/FiberSmartRecord';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
 import StorefrontIcon from '@mui/icons-material/Storefront';
@@ -20,6 +21,10 @@ import { metaApi } from '../../api/endpoints.js';
 
 const DRAWER_WIDTH = 224;
 
+const isSuperAdminRole = (r) => r === 'super_admin';
+
+// Base nav (all admins). Super-admin-only entries carry `superAdmin: true` and are
+// filtered out for plain admins below.
 const navItems = [
   { label: 'Dashboard', icon: <DashboardIcon />,  path: '/admin' },
   { label: 'Users',     icon: <PeopleIcon />,      path: '/admin/users' },
@@ -29,6 +34,7 @@ const navItems = [
   { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
   { label: 'Monster Map', icon: <PublicIcon />,    path: '/admin/world' },
+  { label: 'Recording Sessions', icon: <FiberSmartRecordIcon />, path: '/admin/recording-sessions', superAdmin: true },
   { label: 'Settings',  icon: <SettingsIcon />,    path: '/admin/settings' },
 ];
 
@@ -37,6 +43,9 @@ export default function AdminLayout() {
   const location = useLocation();
   const { user, logout } = useAuth();
   const [serverVersion, setServerVersion] = useState(null);
+
+  // Recording Sessions is super-admin only; hide it from plain admins.
+  const items = navItems.filter((it) => !it.superAdmin || isSuperAdminRole(user?.role));
 
   // One-shot probe of the running server build. Surfacing this next to the
   // client version makes version-mismatch deploys (server updated, client
@@ -85,7 +94,7 @@ export default function AdminLayout() {
         <Divider />
 
         <List sx={{ px: 1, py: 0.5 }}>
-          {navItems.map((item) => (
+          {items.map((item) => (
             <ListItemButton
               key={item.path}
               onClick={() => navigate(item.path)}

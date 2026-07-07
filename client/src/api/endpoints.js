@@ -95,6 +95,14 @@ export const adminApi = {
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/map`, { method: 'POST', body: formData });
   },
   deleteZoneMap: (sid, zone)       => apiFetch(`/api/admin/world/servers/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/map`, { method: 'DELETE' }),
+
+  // Per-server reference-list coverage (super-admin) — additive. Returns
+  // { counts, zones:[{ zone_no, name|null, has_data, has_bounds, has_background }],
+  //   mobs:[{ mob_id, name }] }. Optional ?q filters the mob table server-side.
+  getServerOverview: (id, q) => {
+    const qs = q ? `?${new URLSearchParams({ q }).toString()}` : '';
+    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/overview${qs}`);
+  },
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────
@@ -154,6 +162,10 @@ export const worldApi = {
 
   // Zone framing bounds (additive portal GET; 404 when absent).
   zoneBounds: (sid, zone) => apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/bounds`),
+
+  // Per-server reference name lists (bot-exported) → { zones:{ "<zone_no>":"<name>" },
+  // mobs:{ "<mob_id>":"<name>" } }. Used to label zone/mob pickers with real names.
+  names: (sid) => apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/names`),
 
   // URL of a zone's uploaded background image (same-origin authed GET streamed by
   // the server). Used directly as an <image href> — not fetched via apiFetch, so

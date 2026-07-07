@@ -9,9 +9,12 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import MapIcon from '@mui/icons-material/Map';
 import { worldApi } from '../../api/endpoints.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Recording Sessions — user-facing read view over the spawn-recording endpoints.
+// Recording Sessions — ADMIN-ONLY read view over the spawn-recording endpoints.
+// (Routed under /admin/recording-sessions, super-admin only; the server also
+// gates the underlying session-list/coverage/diff/detail endpoints.)
 //
 // Pick a (visible) SERVER, then see:
 //   (a) SESSIONS table   — version windows (worldApi.sessions)
@@ -47,6 +50,8 @@ const serverLabel = (s) => s.name || `Server #${s.id}`;
 
 export default function WorldSessions() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
 
   const [servers, setServers]   = useState([]);
   const [serverId, setServerId] = useState('');
@@ -75,7 +80,10 @@ export default function WorldSessions() {
   const [diffError, setDiffError] = useState('');
 
   // ── Servers (visible only) ────────────────────────────────────────────────
+  // Gated on isSuperAdmin so a non-super-admin that somehow mounts this (the
+  // route + server-side 403 already block it) never fires the fetches.
   useEffect(() => {
+    if (!isSuperAdmin) return undefined;
     let alive = true;
     setLoadingServers(true);
     worldApi.servers()
@@ -83,7 +91,7 @@ export default function WorldSessions() {
       .catch((e) => { if (alive) setTopError(e.data?.error || e.message || 'Failed to load servers'); })
       .finally(() => { if (alive) setLoadingServers(false); });
     return () => { alive = false; };
-  }, []);
+  }, [isSuperAdmin]);
 
   const onServerChange = (id) => {
     setServerId(id);
@@ -109,7 +117,7 @@ export default function WorldSessions() {
 
   // ── Sessions for the server ───────────────────────────────────────────────
   useEffect(() => {
-    if (!serverId) { setSessions([]); return; }
+    if (!isSuperAdmin || !serverId) { setSessions([]); return undefined; }
     let alive = true;
     setLoadingSessions(true);
     setSessionsError('');
@@ -118,11 +126,11 @@ export default function WorldSessions() {
       .catch((e) => { if (alive) setSessionsError(e.data?.error || e.message || 'Failed to load sessions'); })
       .finally(() => { if (alive) setLoadingSessions(false); });
     return () => { alive = false; };
-  }, [serverId]);
+  }, [serverId, isSuperAdmin]);
 
   // ── Coverage for the server ───────────────────────────────────────────────
   useEffect(() => {
-    if (!serverId) { setCoverage([]); return; }
+    if (!isSuperAdmin || !serverId) { setCoverage([]); return undefined; }
     let alive = true;
     setLoadingCoverage(true);
     setCoverageError('');
@@ -131,7 +139,7 @@ export default function WorldSessions() {
       .catch((e) => { if (alive) setCoverageError(e.data?.error || e.message || 'Failed to load coverage'); })
       .finally(() => { if (alive) setLoadingCoverage(false); });
     return () => { alive = false; };
-  }, [serverId]);
+  }, [serverId, isSuperAdmin]);
 
   // Zones that appear in the sessions list (for the diff zone picker).
   const diffZones = useMemo(() => {
@@ -165,6 +173,12 @@ export default function WorldSessions() {
   };
 
   const hasRecordedBy = sessions.some((s) => s.recorded_by != null);
+
+  // Defense-in-depth: this view is routed super-admin only, but guard here too so
+  // it never renders (or fires its GETs) for a non-super-admin who reaches it.
+  if (!isSuperAdmin) {
+    return <Alert severity="warning">Recording sessions are super-admin only.</Alert>;
+  }
 
   return (
     <Box>

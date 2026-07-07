@@ -288,7 +288,9 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     // Coverage counts so the admin sees what data a server carries before
     // publishing or deleting it: distinct mobs, spawn cells, and total sightings.
     // known_ips (034) lists the game socket IPs registered for each server.
-    const [mobCounts, cellCounts, hostRows] = await Promise.all([
+    // zone_named_count / mob_named_count (035) count the REFERENCE name rows so
+    // the admin sees how complete the zone/monster name lists are.
+    const [mobCounts, cellCounts, hostRows, zoneNameCounts, mobNameCounts] = await Promise.all([
       db('mob_catalog').whereIn('server_id', ids)
         .groupBy('server_id')
         .select('server_id', db.raw('COUNT(*) as mob_count')),
@@ -302,9 +304,17 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
       db('game_server_hosts').whereIn('server_id', ids)
         .whereNotNull('ip')
         .select('server_id', 'ip'),
+      db('game_zones').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(*) as zone_named_count')),
+      db('mob_names').whereIn('server_id', ids)
+        .groupBy('server_id')
+        .select('server_id', db.raw('COUNT(*) as mob_named_count')),
     ]);
     const mobMap  = Object.fromEntries(mobCounts.map(c => [c.server_id, Number(c.mob_count)]));
     const cellMap = Object.fromEntries(cellCounts.map(c => [c.server_id, c]));
+    const zoneNameMap = Object.fromEntries(zoneNameCounts.map(c => [c.server_id, Number(c.zone_named_count)]));
+    const mobNameMap  = Object.fromEntries(mobNameCounts.map(c => [c.server_id, Number(c.mob_named_count)]));
     const ipsMap  = new Map();
     for (const h of hostRows) {
       if (!ipsMap.has(h.server_id)) ipsMap.set(h.server_id, []);
@@ -312,11 +322,13 @@ router.get('/servers', requireSuperAdmin, async (req, res) => {
     }
     for (const s of servers) {
       const cc = cellMap[s.id];
-      s.visible         = !!s.visible;   // normalize mysql2 0/1
-      s.mob_count       = mobMap[s.id]  || 0;
-      s.cell_count      = cc ? Number(cc.cell_count) : 0;
-      s.sightings_total = cc ? Number(cc.sightings_total || 0) : 0;
-      s.known_ips       = ipsMap.get(s.id) || [];
+      s.visible           = !!s.visible;   // normalize mysql2 0/1
+      s.mob_count         = mobMap[s.id]  || 0;
+      s.cell_count        = cc ? Number(cc.cell_count) : 0;
+      s.sightings_total   = cc ? Number(cc.sightings_total || 0) : 0;
+      s.zone_named_count  = zoneNameMap[s.id] || 0;
+      s.mob_named_count   = mobNameMap[s.id]  || 0;
+      s.known_ips         = ipsMap.get(s.id) || [];
     }
   }
 
@@ -464,6 +476,9 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
     c.mob_spawn_cells         = await trx('mob_spawn_cells').where('server_id', id).del();
     c.mob_catalog             = await trx('mob_catalog').where('server_id', id).del();
     c.zone_bounds             = await trx('zone_bounds').where('server_id', id).del();
+    // 035: also purge the server's reference zone + monster name lists.
+    c.game_zones              = await trx('game_zones').where('server_id', id).del();
+    c.mob_names               = await trx('mob_names').where('server_id', id).del();
     // 034: also purge the server's registered host IPs.
     c.game_server_hosts       = await trx('game_server_hosts').where('server_id', id).del();
     c.game_servers            = await trx('game_servers').where('id', id).del();
@@ -477,6 +492,93 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
   });
 
   res.json({ deleted: true, counts });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-server DRILL-IN OVERVIEW (035 reference lists + coverage). Super-admin-only.
+// Answers "what is this server missing" for the admin manage panel: the zone
+// universe (every zone that carries ANY signal) with per-zone name/data/bounds/
+// background flags + rollup counts, and the full monster name list (searchable).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/admin/world/servers/:id/overview — coverage + reference-name drill-in.
+//   Response: { counts:{ zones_total, zones_named, mobs_named, missing_name,
+//                         missing_background, missing_data, missing_bounds },
+//               zones:[{ zone_no, name|null, has_data, has_bounds, has_background }],
+//               mobs:[{ mob_id, name }] }
+router.get('/servers/:id/overview', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const MOB_CAP = 5000;   // cap the monster-name list returned to the panel.
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+  // Zone universe = DISTINCT zone_no UNION across the four per-zone signals:
+  // named zones (game_zones), framed bounds (zone_bounds), background images
+  // (zone_maps), and spawn data (mob_spawn_cells). Built in JS (like the
+  // zone-maps coverage handler) so an orphan in any one source still surfaces.
+  // mobsTotal is an UNFILTERED count so the mobs_named rollup stays accurate even
+  // when the ?q search narrows / the MOB_CAP truncates the returned mob list.
+  const [nameZones, boundZones, imageZones, dataZones, mobRows, mobsTotalRow] = await Promise.all([
+    db('game_zones').where('server_id', serverId).select('zone_no', 'name'),
+    db('zone_bounds').where('server_id', serverId).distinct('zone_no').select('zone_no'),
+    db('zone_maps').where('server_id', serverId).distinct('zone_no').select('zone_no'),
+    db('mob_spawn_cells').where('server_id', serverId).distinct('zone_no').select('zone_no'),
+    (() => {
+      let mq = db('mob_names').where('server_id', serverId)
+        .select('mob_id', 'name');
+      if (q) {
+        mq = mq.where(function () {
+          this.where('name', 'like', `%${q}%`);
+          const asId = parseInt(q, 10);
+          if (Number.isFinite(asId)) this.orWhere('mob_id', asId);
+        });
+      }
+      return mq.orderBy('mob_id', 'asc').limit(MOB_CAP);
+    })(),
+    db('mob_names').where('server_id', serverId).count('* as c').first(),
+  ]);
+  const mobsTotal = Number(mobsTotalRow?.c ?? 0);
+
+  const nameByZone = new Map(nameZones.map(r => [r.zone_no, r.name]));
+  const boundsSet  = new Set(boundZones.map(r => r.zone_no));
+  const imageSet   = new Set(imageZones.map(r => r.zone_no));
+  const dataSet    = new Set(dataZones.map(r => r.zone_no));
+
+  const zoneSet = new Set();
+  for (const r of nameZones)  zoneSet.add(r.zone_no);
+  for (const r of boundZones) zoneSet.add(r.zone_no);
+  for (const r of imageZones) zoneSet.add(r.zone_no);
+  for (const r of dataZones)  zoneSet.add(r.zone_no);
+
+  const zones = [...zoneSet].sort((a, b) => a - b).map((zone_no) => ({
+    zone_no,
+    name:           nameByZone.has(zone_no) ? nameByZone.get(zone_no) : null,
+    has_data:       dataSet.has(zone_no),
+    has_bounds:     boundsSet.has(zone_no),
+    has_background: imageSet.has(zone_no),
+  }));
+
+  const counts = {
+    zones_total:        zones.length,
+    zones_named:        zones.filter(z => z.name != null).length,
+    mobs_named:         mobsTotal,
+    missing_name:       zones.filter(z => z.name == null).length,
+    missing_background: zones.filter(z => !z.has_background).length,
+    missing_data:       zones.filter(z => !z.has_data).length,
+    missing_bounds:     zones.filter(z => !z.has_bounds).length,
+  };
+
+  res.json({
+    counts,
+    zones,
+    mobs: mobRows.map(r => ({ mob_id: r.mob_id, name: r.name })),
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

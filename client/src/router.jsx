@@ -23,8 +23,10 @@ import PortalDashboard from './components/portal/Dashboard.jsx';
 import Keys from './components/portal/Keys.jsx';
 import Shop from './components/portal/Shop.jsx';
 import PortalSessions from './components/portal/Sessions.jsx';
-import WorldSessions from './components/portal/WorldSessions.jsx';
 import MonsterMap from './components/portal/MonsterMap.jsx';
+
+// Recording sessions (spawn recording / coverage / version-diff) — admin-only.
+import WorldSessions from './components/portal/WorldSessions.jsx';
 
 export default function AppRouter() {
   return (
@@ -53,6 +55,12 @@ export default function AppRouter() {
         <Route path="statuses" element={<Statuses />} />
         <Route path="audit" element={<AuditLog />} />
         <Route path="world" element={<AdminWorld />} />
+        {/* Recording sessions moved here from the user portal — super-admin only. */}
+        <Route path="recording-sessions" element={
+          <ProtectedRoute role="super_admin">
+            <WorldSessions />
+          </ProtectedRoute>
+        } />
         <Route path="settings" element={<AdminSettings />} />
       </Route>
 
@@ -65,7 +73,6 @@ export default function AppRouter() {
         <Route index element={<PortalDashboard />} />
         <Route path="keys" element={<Keys />} />
         <Route path="sessions" element={<PortalSessions />} />
-        <Route path="recording-sessions" element={<WorldSessions />} />
         <Route path="shop" element={<Shop />} />
         <Route path="world" element={<MonsterMap />} />
       </Route>

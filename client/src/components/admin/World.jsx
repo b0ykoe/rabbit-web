@@ -3,7 +3,8 @@ import {
   Box, Typography, Button, TextField, Alert, Paper, Chip, Stack,
   Table, TableHead, TableRow, TableCell, TableBody, Tooltip, IconButton,
   Switch, FormControlLabel, Dialog, DialogTitle, DialogContent, DialogContentText,
-  DialogActions, Collapse, CircularProgress, Menu, MenuItem,
+  DialogActions, Collapse, CircularProgress, Menu, MenuItem, InputAdornment,
+  TableContainer,
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import KeyIcon from '@mui/icons-material/VpnKey';
@@ -15,6 +16,9 @@ import ImageIcon from '@mui/icons-material/Image';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import DownloadIcon from '@mui/icons-material/Download';
+import SearchIcon from '@mui/icons-material/Search';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
 import { adminApi, worldApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -730,6 +734,285 @@ function BackgroundsPanel() {
   );
 }
 
+// Tiny yes/no cell for the zone-coverage table: a green check when present, a
+// muted cross when absent. Keeps the table scannable at a glance.
+function BoolCell({ ok }) {
+  return ok
+    ? <CheckCircleIcon fontSize="small" sx={{ color: 'success.main' }} />
+    : <CancelIcon fontSize="small" sx={{ color: 'text.disabled' }} />;
+}
+
+// Expanded per-server body for the reference-list overview. Lazily fetches
+// getServerOverview (counts + zone coverage + mob names) AND listZoneMaps (for
+// the reusable background upload/replace/delete controls) on first expand.
+function ServerOverviewBody({ server }) {
+  const [overview, setOverview] = useState(null);   // null = not loaded
+  const [loadingOv, setLoadingOv] = useState(false);
+  const [ovError, setOvError]   = useState('');
+
+  const [zoneMaps, setZoneMaps]       = useState(null);
+  const [loadingMaps, setLoadingMaps] = useState(false);
+
+  const [mobQuery, setMobQuery] = useState('');
+
+  const loadOverview = async () => {
+    setLoadingOv(true);
+    setOvError('');
+    try {
+      const res = await adminApi.getServerOverview(server.id);
+      setOverview(res || null);
+    } catch (err) {
+      setOvError(err.data?.error || err.message || 'Load failed');
+      setOverview(null);
+    } finally {
+      setLoadingOv(false);
+    }
+  };
+
+  // Backgrounds use the same zone-maps listing/controls as the Backgrounds panel.
+  const loadZoneMaps = async () => {
+    setLoadingMaps(true);
+    try {
+      const res = await adminApi.listZoneMaps(server.id);
+      setZoneMaps(res?.data || []);
+    } catch {
+      setZoneMaps([]);
+    } finally {
+      setLoadingMaps(false);
+    }
+  };
+
+  useEffect(() => {
+    loadOverview();
+    loadZoneMaps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server.id]);
+
+  const counts = overview?.counts || {};
+  const zones  = overview?.zones || [];
+  const mobs   = overview?.mobs || [];
+
+  const q = mobQuery.trim().toLowerCase();
+  const filteredMobs = q
+    ? mobs.filter((m) => String(m.mob_id).includes(q) || (m.name || '').toLowerCase().includes(q))
+    : mobs;
+
+  return (
+    <Box sx={{ py: 1.5 }}>
+      {ovError && <Alert severity="error" sx={{ mb: 1 }}>{ovError}</Alert>}
+      {loadingOv && (
+        <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>
+      )}
+
+      {!loadingOv && overview && (
+        <>
+          {/* What's missing — summary counts */}
+          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 2 }}>
+            <Chip label={`${counts.zones_total ?? 0} zones`} size="small" variant="outlined" />
+            <Chip label={`${counts.zones_named ?? 0} named`} size="small" color="success" variant="outlined" />
+            <Chip label={`${counts.mobs_named ?? 0} mobs named`} size="small" color="success" variant="outlined" />
+            <Chip label={`${counts.missing_name ?? 0} missing name`} size="small" color={counts.missing_name ? 'warning' : 'default'} variant="outlined" />
+            <Chip label={`${counts.missing_data ?? 0} missing data`} size="small" color={counts.missing_data ? 'warning' : 'default'} variant="outlined" />
+            <Chip label={`${counts.missing_bounds ?? 0} missing bounds`} size="small" color={counts.missing_bounds ? 'warning' : 'default'} variant="outlined" />
+            <Chip label={`${counts.missing_background ?? 0} missing background`} size="small" color={counts.missing_background ? 'warning' : 'default'} variant="outlined" />
+          </Box>
+
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Zone and monster names come from the bot's <strong>“Export names to portal”</strong> button
+            (Recording tab). This panel can't force a refresh — re-run that button on a connected bot to
+            update the lists.
+          </Alert>
+
+          {/* Zone coverage table */}
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Zone coverage</Typography>
+          <Paper variant="outlined" sx={{ mb: 2 }}>
+            <TableContainer sx={{ maxHeight: 360 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Zone</TableCell>
+                    <TableCell>Name</TableCell>
+                    <TableCell align="center">Data</TableCell>
+                    <TableCell align="center">Bounds</TableCell>
+                    <TableCell align="center">Background</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {zones.length === 0 && (
+                    <TableRow><TableCell colSpan={5}><Typography variant="caption" color="text.disabled">No zones for this server.</Typography></TableCell></TableRow>
+                  )}
+                  {zones.map((z) => (
+                    <TableRow key={z.zone_no} hover>
+                      <TableCell><Typography variant="body2">Zone {z.zone_no}</Typography></TableCell>
+                      <TableCell>
+                        {z.name
+                          ? <Typography variant="body2">{z.name}</Typography>
+                          : <Typography variant="caption" color="text.disabled">(unnamed)</Typography>}
+                      </TableCell>
+                      <TableCell align="center"><BoolCell ok={!!z.has_data} /></TableCell>
+                      <TableCell align="center"><BoolCell ok={!!z.has_bounds} /></TableCell>
+                      <TableCell align="center"><BoolCell ok={!!z.has_background} /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
+          {/* Monster names table (searchable) */}
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, mb: 1 }}>
+            <Typography variant="subtitle2">Monsters ({mobs.length})</Typography>
+            <TextField
+              size="small" placeholder="Filter by id or name" value={mobQuery}
+              onChange={(e) => setMobQuery(e.target.value)}
+              InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
+              sx={{ width: 260 }}
+            />
+          </Box>
+          <Paper variant="outlined" sx={{ mb: 2 }}>
+            <TableContainer sx={{ maxHeight: 360 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ width: 120 }}>Mob ID</TableCell>
+                    <TableCell>Name</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {mobs.length === 0 && (
+                    <TableRow><TableCell colSpan={2}><Typography variant="caption" color="text.disabled">No monster names for this server yet.</Typography></TableCell></TableRow>
+                  )}
+                  {mobs.length > 0 && filteredMobs.length === 0 && (
+                    <TableRow><TableCell colSpan={2}><Typography variant="caption" color="text.disabled">No monsters match “{mobQuery}”.</Typography></TableCell></TableRow>
+                  )}
+                  {filteredMobs.map((m) => (
+                    <TableRow key={m.mob_id} hover>
+                      <TableCell><Typography variant="caption" fontFamily="monospace">{m.mob_id}</Typography></TableCell>
+                      <TableCell><Typography variant="body2">{m.name}</Typography></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Paper>
+
+          {/* Background images — reuses the zone-maps upload/replace/delete row. */}
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>Background images</Typography>
+          {loadingMaps && (
+            <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={18} /></Box>
+          )}
+          {!loadingMaps && zoneMaps && zoneMaps.length === 0 && (
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1 }}>
+              No framed zones (zone_bounds) for this server.
+            </Typography>
+          )}
+          {!loadingMaps && zoneMaps && zoneMaps.length > 0 && (
+            <Paper variant="outlined">
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Zone</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell align="right"></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {zoneMaps.map((z) => (
+                    <ZoneMapRow key={z.zone_no} serverId={server.id} zone={z} onMutated={loadZoneMaps} />
+                  ))}
+                </TableBody>
+              </Table>
+            </Paper>
+          )}
+        </>
+      )}
+    </Box>
+  );
+}
+
+// One expandable server row in the reference-list overview panel.
+function ServerOverviewRow({ server }) {
+  const [open, setOpen] = useState(false);
+  const named = server.zone_named_count ?? null;
+  const mobNamed = server.mob_named_count ?? null;
+
+  return (
+    <>
+      <TableRow hover sx={{ cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
+        <TableCell padding="checkbox">
+          <IconButton size="small">
+            {open ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+          </IconButton>
+        </TableCell>
+        <TableCell>{server.id}</TableCell>
+        <TableCell>{server.name || server.display_name || `Server #${server.id}`}</TableCell>
+        <TableCell align="right">
+          {named == null
+            ? '—'
+            : <Chip label={`${named} zones`} size="small" variant="outlined" color={named ? 'success' : 'default'} />}
+        </TableCell>
+        <TableCell align="right">
+          {mobNamed == null
+            ? '—'
+            : <Chip label={`${mobNamed} mobs`} size="small" variant="outlined" color={mobNamed ? 'success' : 'default'} />}
+        </TableCell>
+      </TableRow>
+      <TableRow>
+        <TableCell colSpan={5} sx={{ py: 0, borderBottom: open ? undefined : 'none' }}>
+          <Collapse in={open} timeout="auto" unmountOnExit>
+            {open && <ServerOverviewBody server={server} />}
+          </Collapse>
+        </TableCell>
+      </TableRow>
+    </>
+  );
+}
+
+// Per-server reference-list overview (super-admin). Lists every tracked server;
+// expand one to see what's missing (name/data/bounds/background counts), a zone
+// coverage table (name / has_data / has_bounds / has_background), a searchable
+// monster-names table, and the reusable background-image controls. Names come
+// from the bot's "Export names to portal" button — this panel is read-only for
+// the lists and cannot force the bot to re-export.
+function ServerOverviewPanel() {
+  const { data, loading } = useApi(() => adminApi.getWorldServers(), []);
+  const rows = data?.data || [];
+
+  return (
+    <Box sx={{ mb: 5 }}>
+      <Typography variant="h6" fontWeight={600} sx={{ mb: 1 }}>Monster Map — Reference lists &amp; coverage</Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+        Per-server zone &amp; monster reference names plus coverage. Expand a server to see what's
+        missing, the per-zone coverage (name / data / bounds / background) and the monster-name list.
+        These lists are populated by the bot's <strong>“Export names to portal”</strong> button.
+      </Typography>
+
+      <Paper variant="outlined">
+        <Box sx={{ overflowX: 'auto' }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell padding="checkbox" />
+                <TableCell>ID</TableCell>
+                <TableCell>Server</TableCell>
+                <TableCell align="right">Zones named</TableCell>
+                <TableCell align="right">Mobs named</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {loading && <TableRow><TableCell colSpan={5}>Loading…</TableCell></TableRow>}
+              {!loading && rows.length === 0 && (
+                <TableRow><TableCell colSpan={5}><Typography variant="caption" color="text.disabled">No servers tracked yet.</Typography></TableCell></TableRow>
+              )}
+              {rows.map((r) => <ServerOverviewRow key={r.id} server={r} />)}
+            </TableBody>
+          </Table>
+        </Box>
+      </Paper>
+    </Box>
+  );
+}
+
 // Monster-map ingest-token administration (PLAN_v2 §3.9). Super-admin only:
 // mint an authoritative scope:'ingest' token a Debug bot can paste to push
 // spawns to the ingest route, list issued tokens, and per-token revoke.
@@ -789,6 +1072,9 @@ export default function World() {
     <Box>
       {/* Server management (additive) */}
       <ServersPanel />
+
+      {/* Per-server reference-list overview + coverage (additive) */}
+      <ServerOverviewPanel />
 
       {/* Per-(server, zone) background images (additive) */}
       <BackgroundsPanel />

@@ -267,6 +267,37 @@ export const zoneBoundsSchema = z.object({
   cell_size_m:      z.number().positive().optional().default(4),
 });
 
+// ── Bot: Reference lists — per-server zone + monster NAMES (world) ────────────
+// REPLACE-ALL ingest of the client's authoritative zone/monster name tables for
+// a server. server_id is AUTHORITATIVE when present; the ip/variant hint resolves
+// a fallback server exactly like spawnIngestSchema. At least one of zones/mobs
+// must be present (a body with neither is a no-op → rejected by the refine). The
+// arrays are capped so an authed-but-hostile client can't drive an unbounded
+// replace-all: zones ≤4000 (there are only ~hundreds of real zones), mobs ≤60000
+// (mobDBIndex is probed up to ~30000, doubled for headroom). Duplicate ids inside
+// a batch are deduped in the route, not here.
+export const namesSchema = z.object({
+  token:  z.string().optional(),                   // consumed by validateSpawnIngest, ignored here
+  // Admin-defined NAMED server (034). Authoritative when present.
+  server_id: z.coerce.number().int().positive().optional(),
+  // Legacy ip/variant hint — optional fallback resolve (same as spawnIngestSchema).
+  server: z.object({
+    ip:      z.string().min(1).max(45),
+    variant: z.string().min(1).max(32),
+    port:    z.string().max(8).optional(),
+  }).optional(),
+  zones: z.array(z.object({
+    zone_no: z.number().int().min(0).max(65535),
+    name:    z.string().min(1).max(128),
+  })).max(4000).optional(),
+  mobs: z.array(z.object({
+    mob_id: z.number().int().positive(),
+    name:   z.string().min(1).max(96),
+  })).max(60000).optional(),
+}).refine(d => (d.zones && d.zones.length) || (d.mobs && d.mobs.length), {
+  message: 'Provide at least one of zones or mobs',
+});
+
 // ── Portal: Monster-map versioned read (world) ───────────────────────────────
 // STEP 3 versioned-spots read guard for the optional ?version query on
 // GET /:serverId/zones/:zoneNo/spawns. Lightweight + ADDITIVE — it does NOT

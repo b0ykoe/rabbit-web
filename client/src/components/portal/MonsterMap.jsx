@@ -59,6 +59,11 @@ export default function MonsterMap() {
   const [loadingServers, setLoadingServers] = useState(true);
   const [topError, setTopError] = useState('');
 
+  // Reference name lists (bot-exported) for the selected server, keyed by string
+  // id → real name. Prefer these over the mob_catalog / "Zone N" fallbacks.
+  const [zoneNames, setZoneNames] = useState({}); // { "<zone_no>": "<name>" }
+  const [mobNames, setMobNames]   = useState({}); // { "<mob_id>":  "<name>" }
+
   const [mobQuery, setMobQuery] = useState('');
   const [mobs, setMobs]         = useState([]);
   const [loadingMobs, setLoadingMobs] = useState(false);
@@ -142,6 +147,22 @@ export default function MonsterMap() {
     }
   }, [pendingZone, zones]);
 
+  // ── Reference name lists for the selected server ───────────────────────────
+  // Additive/optional — a failure just leaves the maps empty and the pickers fall
+  // back to "Zone N" / the mob_catalog name.
+  useEffect(() => {
+    if (!serverId) { setZoneNames({}); setMobNames({}); return; }
+    let alive = true;
+    worldApi.names(serverId)
+      .then((r) => {
+        if (!alive) return;
+        setZoneNames(r?.zones || {});
+        setMobNames(r?.mobs || {});
+      })
+      .catch(() => { if (alive) { setZoneNames({}); setMobNames({}); } });
+    return () => { alive = false; };
+  }, [serverId]);
+
   // ── Mobs (catalog search, debounced) ──────────────────────────────────────
   useEffect(() => {
     if (!serverId) { setMobs([]); return; }
@@ -161,14 +182,17 @@ export default function MonsterMap() {
     setServerId(id);
     setMobQuery(''); setMobs([]); setSelectedMobs(new Set()); setFocusMob(null);
     setZones([]); setZoneNo(''); setClusters([]); setBounds(null);
+    setZoneNames({}); setMobNames({});
     setMapError('');
     // A manual server pick drops any deep-link highlight/pending zone.
     setHighlightSpots([]); setPendingZone('');
   };
 
   const mobName = useCallback(
-    (id) => mobs.find((m) => m.mob_id === id)?.name || `#${id}`,
-    [mobs],
+    (id) => mobNames[id]
+      || mobs.find((m) => m.mob_id === id)?.name
+      || `Mob #${id}`,
+    [mobNames, mobs],
   );
 
   const toggleMob = (id) => {
@@ -319,19 +343,35 @@ export default function MonsterMap() {
     return { nodes, minX, maxX, minZ, maxZ, scale, offX, offZ, hasBounds: !!bounds };
   }, [visibleClusters, bounds]);
 
-  // Background <image> rectangle in SVG space, framing the full zone AABB with the
-  // SAME world→SVG transform as the spawn points (so an uploaded bot-export image,
-  // which frames exactly this AABB, aligns pixel-accurately). Only when bounds
-  // expose the world_min/max corners; otherwise there is nothing to align to.
+  // Background <image> rectangle in SVG space, framing the full zone extent with the
+  // SAME world→SVG transform as the spawn points (so an uploaded bot-export image
+  // aligns pixel-accurately). Two cases:
+  //  • bounds present  → frame to the zone AABB (framed:true), as before.
+  //  • bounds absent   → frame to the whole auto-fit cluster extent (framed:false),
+  //    i.e. the full [minX..maxX]×[minZ..maxZ] the spawn points were fit into. This
+  //    lets an uploaded background render even without zone_bounds (bug-fix: it used
+  //    to bail out and the image never appeared).
   const bgRect = useMemo(() => {
-    if (!frame || !bounds || bounds.world_min_x === undefined) return null;
-    const { scale, offX, offZ, minX, minZ } = frame;
-    const x = offX + (bounds.world_min_x - minX) * scale;
-    const y = offZ + (bounds.world_min_z - minZ) * scale;
-    const width  = (bounds.world_max_x - bounds.world_min_x) * scale;
-    const height = (bounds.world_max_z - bounds.world_min_z) * scale;
+    if (!frame) return null;
+    const { scale, offX, offZ, minX, minZ, maxX, maxZ } = frame;
+
+    let x, y, width, height, framed;
+    if (bounds && bounds.world_min_x !== undefined) {
+      x = offX + (bounds.world_min_x - minX) * scale;
+      y = offZ + (bounds.world_min_z - minZ) * scale;
+      width  = (bounds.world_max_x - bounds.world_min_x) * scale;
+      height = (bounds.world_max_z - bounds.world_min_z) * scale;
+      framed = true;
+    } else {
+      // Auto-fit: the whole extent the cluster points were framed into.
+      x = offX;
+      y = offZ;
+      width  = (maxX - minX) * scale;
+      height = (maxZ - minZ) * scale;
+      framed = false;
+    }
     if (!(width > 0) || !(height > 0)) return null;
-    return { x, y, width, height };
+    return { x, y, width, height, framed };
   }, [frame, bounds]);
 
   const showBg = bgEnabled && bgAvailable && !!bgRect && !!serverId && !!zoneNo;
@@ -404,7 +444,9 @@ export default function MonsterMap() {
             disabled={!zones.length}
             helperText={loadingZones ? 'Deriving…' : (focusMob == null ? 'Select a mob' : (zones.length ? '' : 'No zones'))}
           >
-            {zones.map((z) => <MenuItem key={z} value={String(z)}>Zone {z}</MenuItem>)}
+            {zones.map((z) => (
+              <MenuItem key={z} value={String(z)}>{zoneNames[z] || `Zone ${z}`}</MenuItem>
+            ))}
           </TextField>
         </Grid>
         <Grid item xs={6} sm={3}>
@@ -443,7 +485,7 @@ export default function MonsterMap() {
                     <ListItemButton dense onClick={() => toggleMob(m.mob_id)} sx={{ py: 0 }}>
                       <Checkbox edge="start" size="small" checked={selectedMobs.has(m.mob_id)} tabIndex={-1} disableRipple />
                       <ListItemText
-                        primary={m.name || `Mob #${m.mob_id}`}
+                        primary={mobNames[m.mob_id] || m.name || `Mob #${m.mob_id}`}
                         secondary={`#${m.mob_id}${m.level_min != null ? ` · Lv ${m.level_min}${m.level_max && m.level_max !== m.level_min ? `-${m.level_max}` : ''}` : ''} · ${m.sightings_total ?? 0} seen`}
                         primaryTypographyProps={{ variant: 'body2', noWrap: true }}
                         secondaryTypographyProps={{ variant: 'caption' }}

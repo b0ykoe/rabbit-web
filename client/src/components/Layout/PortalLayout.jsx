@@ -5,13 +5,11 @@ import {
 import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { useApi } from '../../hooks/useApi.js';
-import { worldApi } from '../../api/endpoints.js';
 
 const isAdminRole = (r) => r === 'admin' || r === 'super_admin';
 
-// Nav items always shown. The 'Recording' item (spawn recording sessions) is
-// gated separately behind the spawn_tracking flag — see below.
+// User-facing portal nav. The recording/sessions/diff view is now admin-only
+// (Admin > Recording Sessions) — it is no longer surfaced here.
 const navItems = [
   { label: 'Dashboard',   path: '/portal' },
   { label: 'My Keys',     path: '/portal/keys' },
@@ -20,19 +18,12 @@ const navItems = [
   { label: 'Shop',        path: '/portal/shop' },
 ];
 
-const RECORDING_ITEM = { label: 'Recording', path: '/portal/recording-sessions' };
-
 export default function PortalLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, logout } = useAuth();
 
-  // Show the 'Recording' nav item only once we know spawn_tracking is on.
-  // While loading (rec === undefined) it stays hidden. Reads users.feature_flags.
-  const { data: rec } = useApi(() => worldApi.myRecordingStatus(), []);
-  const items = rec?.spawn_tracking
-    ? [...navItems.slice(0, 3), RECORDING_ITEM, ...navItems.slice(3)]
-    : navItems;
+  const items = navItems;
 
   const handleLogout = async () => {
     await logout();

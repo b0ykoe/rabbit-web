@@ -359,6 +359,31 @@ router.get('/:serverId/channels', async (req, res) => {
   res.json({ data: rows.map(r => r.channel) });
 });
 
+// ── GET /:serverId/names ─────────────────────────────────────────────────────
+// Reference ZONE + MONSTER name lists for a server (035), served as id→name
+// maps so the client MonsterMap can label the zone picker + mob labels by the
+// real in-game name. Session-authed + visible-scoped (mirrors the other
+// session-scoped reads). Empty maps when the bot has not exported names yet.
+router.get('/:serverId/names', async (req, res) => {
+  const serverId = intParam(req.params.serverId);
+  if (serverId == null) return res.status(400).json({ error: 'Bad serverId' });
+  if (!(await callerMaySeeServer(req, serverId))) {
+    return res.status(403).json({ error: 'Server not visible' });
+  }
+
+  const [zoneRows, mobRows] = await Promise.all([
+    db('game_zones').where('server_id', serverId).select('zone_no', 'name'),
+    db('mob_names').where('server_id', serverId).select('mob_id', 'name'),
+  ]);
+
+  const zones = {};
+  for (const r of zoneRows) zones[r.zone_no] = r.name;
+  const mobs = {};
+  for (const r of mobRows) mobs[r.mob_id] = r.name;
+
+  res.json({ zones, mobs });
+});
+
 // ── GET /:serverId/zones/:zoneNo/spawns ──────────────────────────────────────
 // The main heat query. Params:
 //   mob_id           — restrict to one mob (returns per-cell rows).
@@ -712,6 +737,11 @@ router.get('/my-recording-status', async (req, res) => {
 // admins, read via a guarded side query so a missing user_id column can never
 // 500 this route. version_id returned as a STRING (bigint-safe).
 router.get('/:serverId/sessions', async (req, res) => {
+  // RECORDING UI is ADMIN-ONLY now (moved to the admin area). Non-super-admins
+  // are 403'd — the map/servers/spawns/clusters/bounds/names reads stay
+  // user-facing, only the recording sessions/coverage/diff/detail views are gated.
+  if (!reqIsSuperAdmin(req)) return res.status(403).json({ error: 'Super-admin access required' });
+
   const serverId = intParam(req.params.serverId);
   if (serverId == null) return res.status(400).json({ error: 'Bad serverId' });
   if (!(await callerMaySeeServer(req, serverId))) {
@@ -812,6 +842,9 @@ router.get('/:serverId/sessions', async (req, res) => {
 // total_renewed_spots (breadth). zone_bounds presence is folded in cheaply so
 // the UI can mark zones lacking a world-coord frame. Visible-server scoped.
 router.get('/:serverId/coverage', async (req, res) => {
+  // RECORDING UI is ADMIN-ONLY now — non-super-admins are 403'd (see /sessions).
+  if (!reqIsSuperAdmin(req)) return res.status(403).json({ error: 'Super-admin access required' });
+
   const serverId = intParam(req.params.serverId);
   if (serverId == null) return res.status(400).json({ error: 'Bad serverId' });
   if (!(await callerMaySeeServer(req, serverId))) {
@@ -866,6 +899,9 @@ router.get('/:serverId/coverage', async (req, res) => {
 // Both a & b are REQUIRED (400 else) and validated as digit strings (bigint-safe
 // as string binds). Visible-server scoped; the returned spot list is capped.
 router.get('/:serverId/zones/:zoneNo/diff', async (req, res) => {
+  // RECORDING UI is ADMIN-ONLY now — non-super-admins are 403'd (see /sessions).
+  if (!reqIsSuperAdmin(req)) return res.status(403).json({ error: 'Super-admin access required' });
+
   const serverId = intParam(req.params.serverId);
   const zoneNo   = intParam(req.params.zoneNo);
   if (serverId == null || zoneNo == null) return res.status(400).json({ error: 'Bad serverId/zoneNo' });
@@ -988,6 +1024,9 @@ router.get('/:serverId/zones/:zoneNo/diff', async (req, res) => {
 //     semantics as /diff (prev = a, this = b): added = in this only, removed = in
 //     prev only, group_changed = both but group differs, same = both unchanged.
 router.get('/:serverId/zones/:zoneNo/sessions/:versionId/detail', async (req, res) => {
+  // RECORDING UI is ADMIN-ONLY now — non-super-admins are 403'd (see /sessions).
+  if (!reqIsSuperAdmin(req)) return res.status(403).json({ error: 'Super-admin access required' });
+
   const serverId = intParam(req.params.serverId);
   const zoneNo   = intParam(req.params.zoneNo);
   if (serverId == null || zoneNo == null) return res.status(400).json({ error: 'Bad serverId/zoneNo' });
