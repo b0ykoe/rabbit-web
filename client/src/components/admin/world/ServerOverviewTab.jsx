@@ -22,7 +22,7 @@ export default function ServerOverviewTab({ server, overview, loading, refetch, 
         loading={loading}
         refetch={refetch}
         bumpNonce={bumpNonce}
-        onOpenZoneMap={() => onOpenTab?.('map')}
+        onOpenZoneMap={(zoneNo) => onOpenTab?.('map', zoneNo)}
       />
     </Stack>
   );

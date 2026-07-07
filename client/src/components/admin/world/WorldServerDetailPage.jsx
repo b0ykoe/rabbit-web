@@ -10,6 +10,7 @@ import ServerTabs, { SERVER_TABS } from './ServerTabs.jsx';
 import ServerSettingsTab from './ServerSettingsTab.jsx';
 import ServerOverviewTab from './ServerOverviewTab.jsx';
 import UploadsTab from './UploadsTab.jsx';
+import MapTab from './MapTab.jsx';
 import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
@@ -40,8 +41,21 @@ export default function WorldServerDetailPage() {
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(null);
   const [mapNonce, setMapNonce] = useState(0);
+  // Zone to preselect on the Map tab when a "Preview on map" (Uploads) or a coverage
+  // zone-name click hands off a specific zone. Null → the map picks its own default.
+  const [pendingMapZone, setPendingMapZone] = useState(null);
 
   const bumpNonce = useCallback(() => setMapNonce((n) => n + 1), []);
+
+  // Tab navigation with an optional zone hand-off: when a caller opens the Map tab
+  // with a zoneNo (Uploads "Preview on map" / Coverage zone-name click), remember it
+  // as the preselected zone; then push the tab route. Non-map tabs clear any pending
+  // zone so a later plain map visit doesn't jump to a stale one.
+  const openTab = useCallback((t, zoneNo) => {
+    if (t === 'map' && zoneNo != null) setPendingMapZone(zoneNo);
+    else if (t !== 'map') setPendingMapZone(null);
+    navigate(`/admin/world/servers/${id}/${t}`);
+  }, [navigate, id]);
 
   // Fetch both the list row (found by id) and the coverage overview together.
   const refetch = useCallback(async () => {
@@ -78,24 +92,14 @@ export default function WorldServerDetailPage() {
       case 'settings':
         return <ServerSettingsTab {...tabProps} onChanged={refetch} />;
       case 'map':
-        return <StubPanel {...tabProps} label="Embedded map preview lands in P4." />;
+        return <MapTab {...tabProps} initialZone={pendingMapZone} onOpenTab={openTab} />;
       case 'uploads':
-        return (
-          <UploadsTab
-            {...tabProps}
-            onOpenTab={(t) => navigate(`/admin/world/servers/${id}/${t}`)}
-          />
-        );
+        return <UploadsTab {...tabProps} onOpenTab={openTab} />;
       case 'data':
         return <StubPanel {...tabProps} label="Reference tables (monsters / NPCs / zones) land in a later phase." />;
       case 'overview':
       default:
-        return (
-          <ServerOverviewTab
-            {...tabProps}
-            onOpenTab={(t) => navigate(`/admin/world/servers/${id}/${t}`)}
-          />
-        );
+        return <ServerOverviewTab {...tabProps} onOpenTab={openTab} />;
     }
   };
 

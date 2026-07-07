@@ -20,6 +20,12 @@ import { worldApi } from '../../api/endpoints.js';
 // zone's CLUSTERS (8-neighbour packs) as an SVG heat map. A cell is 4 m; world =
 // origin + cell*4, framed by /zones/:z/bounds when present (else auto-fit).
 // Controls: version (latest / all-time) and a mob checklist filter.
+//
+// The view body lives in MonsterMapView, an exported inner component with opt-in
+// props so an admin embed can drive it (controlled server, an explicit zone list,
+// a bare-zone background preview, cache-bust nonce, initial zone). Every prop
+// defaults to EXACTLY the user-facing behaviour, and the default export is a thin
+// shell that renders MonsterMapView with no props — byte-for-byte identical.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CELL_M = 4;          // metres per cell (fixed by ingest quantisation)
@@ -60,14 +66,44 @@ function timeAgo(sec) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-export default function MonsterMap() {
+// The extracted view body. All props default to the current user-facing behaviour.
+//   serverId (prop):   when non-null → controlled server id (picker + deep-link off);
+//                      null → internal server state + picker + deep-link (default).
+//   showServerPicker:  false → hide the server <TextField select> (default true).
+//   zoneList:          [{ zone_no, name }] → the zone picker lists these directly
+//                      (dataless zones selectable); null → mob-derived (default).
+//   allowBareZone:     true → render the SVG + background + bounds frame even when a
+//                      zone has no clusters; false → the empty-hint (default).
+//   nonce:             when set → append ?v=<nonce> to the zone map URL (cache-bust).
+//   initialZone:       when set (with zoneList) → preselect that zone on mount/change.
+export function MonsterMapView({
+  serverId: serverIdProp = null,
+  showServerPicker = true,
+  zoneList = null,
+  allowBareZone = false,
+  nonce = null,
+  initialZone = null,
+} = {}) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
+  // Controlled-server mode: the parent owns the server id (admin embed). In that
+  // mode we skip the internal server-select state, the picker, and the deep-link
+  // seeding entirely — the server is fixed to serverIdProp.
+  const controlledServer = serverIdProp != null;
+  // The zone picker lists explicit zones (dataless included) when a list is given.
+  const zonesProvided = Array.isArray(zoneList);
+  // The deep-link path is user-only: active only for the default (uncontrolled +
+  // picker) configuration, exactly as before.
+  const deepLinkActive = !controlledServer && showServerPicker;
+
   const [servers, setServers]   = useState([]);
-  const [serverId, setServerId] = useState('');
+  const [serverIdState, setServerIdState] = useState('');
   const [loadingServers, setLoadingServers] = useState(true);
   const [topError, setTopError] = useState('');
+
+  // The effective server id: the controlled prop when provided, else internal state.
+  const serverId = controlledServer ? String(serverIdProp) : serverIdState;
 
   // Reference name lists (bot-exported) for the selected server, keyed by string
   // id → real name. Prefer these over the mob_catalog / "Zone N" fallbacks.
@@ -82,7 +118,7 @@ export default function MonsterMap() {
 
   const [version, setVersion]   = useState('latest');          // 'latest' | 'all'
 
-  const [zones, setZones]       = useState([]);                // [zone_no,...]
+  const [zonesState, setZonesState] = useState([]);            // [zone_no,...] (mob-derived)
   const [zoneNo, setZoneNo]     = useState('');
   const [loadingZones, setLoadingZones] = useState(false);
 
@@ -91,6 +127,35 @@ export default function MonsterMap() {
   const [loadingMap, setLoadingMap] = useState(false);
   const [mapError, setMapError] = useState('');
   const [hover, setHover]       = useState(null);              // { c, mobName }
+
+  // The zone-picker option list: the explicit prop list (as zone_no ints) when
+  // provided, else the mob-derived zones. Kept as numbers to preserve equality/
+  // membership checks used throughout (parseInt compares, includes, etc.).
+  const zones = useMemo(() => {
+    if (zonesProvided) {
+      return (zoneList || [])
+        .map((z) => parseInt(z?.zone_no, 10))
+        .filter(Number.isFinite);
+    }
+    return zonesState;
+  }, [zonesProvided, zoneList, zonesState]);
+
+  // Zone display names: prefer the bot-exported names map, then the explicit
+  // zoneList name (admin embed passes real names), then "Zone N".
+  const zoneListNameById = useMemo(() => {
+    const m = {};
+    if (zonesProvided) {
+      for (const z of (zoneList || [])) {
+        const n = parseInt(z?.zone_no, 10);
+        if (Number.isFinite(n) && z?.name) m[n] = z.name;
+      }
+    }
+    return m;
+  }, [zonesProvided, zoneList]);
+  const zoneLabel = useCallback(
+    (z) => zoneNames[z] || zoneListNameById[z] || `Zone ${z}`,
+    [zoneNames, zoneListNameById],
+  );
 
   // Optional per-(server,zone) background image, drawn UNDER the spawn points and
   // framed to the zone AABB. bgAvailable flips false on a 404/decode error (onError)
@@ -113,14 +178,18 @@ export default function MonsterMap() {
   //   { serverId, zoneNo, versionId, highlightSpots:[{center_x,center_z,mob_id}] }.
   // We preselect that server, seed the highlighted mob(s) so the zone derives and
   // the clusters load, force the zone, and remember the spots to ring on the map.
-  // No state → nothing happens; existing behaviour is untouched.
+  // No state → nothing happens; existing behaviour is untouched. Deep-linking is
+  // only active on the default/user path (deepLinkActive).
   const location = useLocation();
-  const navState = location.state || null;
+  const navState = deepLinkActive ? (location.state || null) : null;
   const [highlightSpots, setHighlightSpots] = useState([]); // [{center_x,center_z,mob_id}]
   const [pendingZone, setPendingZone]       = useState(''); // zone to force once derived
 
   // ── Servers (visible only) ────────────────────────────────────────────────
+  // Only the uncontrolled path fetches/holds the server list (the picker needs it).
+  // A controlled embed skips this entirely — the server is fixed by the parent.
   useEffect(() => {
+    if (controlledServer) { setLoadingServers(false); return; }
     let alive = true;
     setLoadingServers(true);
     worldApi.servers()
@@ -128,14 +197,15 @@ export default function MonsterMap() {
       .catch((e) => { if (alive) setTopError(e.data?.error || e.message || 'Failed to load servers'); })
       .finally(() => { if (alive) setLoadingServers(false); });
     return () => { alive = false; };
-  }, []);
+  }, [controlledServer]);
 
   // Consume the deep-link state ONCE (after servers load so the server id is a
   // valid picker option). Seed server + highlighted mobs + pending zone; the
   // normal zone-derivation / map-load effects then take over. Guarded so it runs
-  // a single time per navigation.
+  // a single time per navigation. Only runs on the default/user path.
   const [navConsumed, setNavConsumed] = useState(false);
   useEffect(() => {
+    if (!deepLinkActive) return;
     if (navConsumed || !navState || loadingServers) return;
     const sid = navState.serverId != null ? String(navState.serverId) : '';
     if (!sid) { setNavConsumed(true); return; }
@@ -143,7 +213,7 @@ export default function MonsterMap() {
     const spots = Array.isArray(navState.highlightSpots) ? navState.highlightSpots : [];
     const mobIds = [...new Set(spots.map((s) => s.mob_id).filter((m) => m != null))];
 
-    setServerId(sid);
+    setServerIdState(sid);
     if (navState.zoneNo != null) setPendingZone(String(navState.zoneNo));
     setHighlightSpots(spots);
     if (mobIds.length) {
@@ -151,7 +221,7 @@ export default function MonsterMap() {
       setFocusMob(mobIds[0]);
     }
     setNavConsumed(true);
-  }, [navConsumed, navState, loadingServers]);
+  }, [deepLinkActive, navConsumed, navState, loadingServers]);
 
   // Once zones for the focus mob include the pending (deep-linked) zone, force it.
   useEffect(() => {
@@ -194,9 +264,9 @@ export default function MonsterMap() {
 
   // Reset downstream selections whenever the server changes (manual pick).
   const onServerChange = (id) => {
-    setServerId(id);
+    setServerIdState(id);
     setMobQuery(''); setMobs([]); setSelectedMobs(new Set()); setFocusMob(null);
-    setZones([]); setZoneNo(''); setClusters([]); setBounds(null);
+    setZonesState([]); setZoneNo(''); setClusters([]); setBounds(null);
     setZoneNames({}); setMobNames({});
     setMapError('');
     // A manual server pick drops any deep-link highlight/pending zone.
@@ -231,8 +301,11 @@ export default function MonsterMap() {
   }, [isMobile, selectedMobs.size]);
 
   // ── Derive zones for the focus mob via /mobs/:id/spawns ────────────────────
+  // Skipped when an explicit zoneList is supplied (the picker lists those directly),
+  // so a dataless zone stays selectable and the mob checklist only filters clusters.
   useEffect(() => {
-    if (!serverId || focusMob == null) { setZones([]); setZoneNo(''); return; }
+    if (zonesProvided) return;
+    if (!serverId || focusMob == null) { setZonesState([]); setZoneNo(''); return; }
     let alive = true;
     setLoadingZones(true);
     worldApi.mobSpawns(serverId, focusMob)
@@ -240,13 +313,24 @@ export default function MonsterMap() {
         if (!alive) return;
         const zs = Object.keys(r.zones || {}).map((z) => parseInt(z, 10))
           .filter(Number.isFinite).sort((a, b) => a - b);
-        setZones(zs);
+        setZonesState(zs);
         setZoneNo((prev) => (zs.includes(parseInt(prev, 10)) ? prev : (zs.length ? String(zs[0]) : '')));
       })
-      .catch(() => { if (alive) { setZones([]); setZoneNo(''); } })
+      .catch(() => { if (alive) { setZonesState([]); setZoneNo(''); } })
       .finally(() => { if (alive) setLoadingZones(false); });
     return () => { alive = false; };
-  }, [serverId, focusMob]);
+  }, [zonesProvided, serverId, focusMob]);
+
+  // ── Preselect an initial zone (admin embed) ────────────────────────────────
+  // When an explicit zone list is provided and an initialZone is given, select it
+  // on mount and whenever it changes (e.g. a "Preview on map" hand-off), as long as
+  // it is one of the listed zones.
+  useEffect(() => {
+    if (!zonesProvided || initialZone == null) return;
+    const target = parseInt(initialZone, 10);
+    if (!Number.isFinite(target)) return;
+    if (zones.includes(target)) setZoneNo(String(target));
+  }, [zonesProvided, initialZone, zones]);
 
   // ── Load the map for the selected mobs in the zone + bounds ────────────────
   // All-Time (version=all) → 8-neighbour CLUSTERS (packs). Latest (version=latest)
@@ -254,7 +338,18 @@ export default function MonsterMap() {
   // into the same {center_x/z, min/max, hits…} shape so one renderer serves both.
   useEffect(() => {
     if (!serverId || !zoneNo || selectedMobs.size === 0) {
-      setClusters([]); setBounds(null); return;
+      setClusters([]); setBounds(null);
+      // In bare-zone mode we still want the zone's bounds so the fallback frame can
+      // render the background even with no mob selected. Fetch bounds standalone.
+      if (allowBareZone && serverId && zoneNo) {
+        let alive = true;
+        setMapError('');
+        worldApi.zoneBounds(serverId, zoneNo)
+          .then((r) => { if (alive) setBounds(r?.data && r.data.origin_x !== undefined ? r.data : null); })
+          .catch(() => { if (alive) setBounds(null); });
+        return () => { alive = false; };
+      }
+      return;
     }
     let alive = true;
     setLoadingMap(true);
@@ -301,7 +396,7 @@ export default function MonsterMap() {
       .catch((e) => { if (alive) setMapError(e.data?.error || e.message || 'Failed to load map'); })
       .finally(() => { if (alive) setLoadingMap(false); });
     return () => { alive = false; };
-  }, [serverId, zoneNo, version, selectedMobs]);
+  }, [serverId, zoneNo, version, selectedMobs, allowBareZone]);
 
   // When the (server, zone) target changes, re-arm the background layer: assume it
   // may exist and let <image onError> decide, and restore the default-ON toggle.
@@ -364,6 +459,35 @@ export default function MonsterMap() {
     }));
     return { nodes, minX, maxX, minZ, maxZ, scale, offX, offZ, hasBounds: !!bounds };
   }, [visibleClusters, bounds]);
+
+  // ── Bare-zone fallback frame ───────────────────────────────────────────────
+  // When allowBareZone is on and there are no clusters to fit, synthesise a frame
+  // from the zone bounds (if present) so the background image + a bounds outline
+  // still render. Uses the SAME world→SVG transform math as the cluster frame, with
+  // no nodes. Falls back to a neutral SVG-space frame when bounds are absent.
+  const bareFrame = useMemo(() => {
+    if (!allowBareZone || frame || !serverId || !zoneNo) return null;
+    if (bounds && bounds.world_min_x !== undefined) {
+      const minX = bounds.world_min_x, maxX = bounds.world_max_x;
+      const minZ = bounds.world_min_z, maxZ = bounds.world_max_z;
+      const wSpan = Math.max(1, maxX - minX);
+      const hSpan = Math.max(1, maxZ - minZ);
+      const scale = Math.min((SVG_W - 2 * PAD) / wSpan, (SVG_H - 2 * PAD) / hSpan);
+      const offX = PAD + ((SVG_W - 2 * PAD) - wSpan * scale) / 2;
+      const offZ = PAD + ((SVG_H - 2 * PAD) - hSpan * scale) / 2;
+      return { nodes: [], minX, maxX, minZ, maxZ, scale, offX, offZ, hasBounds: true };
+    }
+    // Neutral default 640 frame in SVG space (world = SVG coords 1:1).
+    return {
+      nodes: [],
+      minX: PAD, maxX: SVG_W - PAD, minZ: PAD, maxZ: SVG_H - PAD,
+      scale: 1, offX: 0, offZ: 0, hasBounds: false,
+    };
+  }, [allowBareZone, frame, serverId, zoneNo, bounds]);
+
+  // The effective frame used by the background rect, the SVG panel and bookkeeping.
+  // In bare-zone mode this is the synthetic frame; otherwise the cluster frame.
+  const activeFrame = frame || bareFrame;
 
   // ── Pan / zoom (interactive SVG viewBox) ──────────────────────────────────
   // Everything is drawn in a fixed SVG_W×SVG_H space; we make the viewBox stateful
@@ -447,9 +571,10 @@ export default function MonsterMap() {
   //    i.e. the full [minX..maxX]×[minZ..maxZ] the spawn points were fit into. This
   //    lets an uploaded background render even without zone_bounds (bug-fix: it used
   //    to bail out and the image never appeared).
+  // Uses activeFrame so the bare-zone fallback frame also gets a background rect.
   const bgRect = useMemo(() => {
-    if (!frame) return null;
-    const { scale, offX, offZ, minX, minZ, maxX, maxZ } = frame;
+    if (!activeFrame) return null;
+    const { scale, offX, offZ, minX, minZ, maxX, maxZ } = activeFrame;
 
     let x, y, width, height, framed;
     if (bounds && bounds.world_min_x !== undefined) {
@@ -468,9 +593,17 @@ export default function MonsterMap() {
     }
     if (!(width > 0) || !(height > 0)) return null;
     return { x, y, width, height, framed };
-  }, [frame, bounds]);
+  }, [activeFrame, bounds]);
 
   const showBg = bgEnabled && bgAvailable && !!bgRect && !!serverId && !!zoneNo;
+
+  // Zone background URL — with an optional cache-bust nonce so a just-uploaded
+  // background/bounds busts the max-age=60 cache in the admin embed.
+  const zoneMapHref = useMemo(() => {
+    if (!serverId || !zoneNo) return null;
+    const base = worldApi.zoneMapUrl(serverId, zoneNo);
+    return nonce != null ? `${base}?v=${nonce}` : base;
+  }, [serverId, zoneNo, nonce]);
 
   // Deep-link highlight lookup: cell-key set of the session's renewed spots, so a
   // matching cluster node gets a distinct pulsing ring. Key = `${mob_id}|${cx}|${cz}`
@@ -548,27 +681,29 @@ export default function MonsterMap() {
 
       {/* Top controls */}
       <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} sm={5}>
-          <TextField
-            select fullWidth size="small" label="Server"
-            value={serverId} onChange={(e) => onServerChange(e.target.value)}
-            disabled={loadingServers}
-            helperText={loadingServers ? 'Loading…' : (servers.length ? '' : 'No public servers')}
-          >
-            {servers.map((s) => (
-              <MenuItem key={s.id} value={String(s.id)}>{serverLabel(s)}</MenuItem>
-            ))}
-          </TextField>
-        </Grid>
-        <Grid item xs={12} sm={4}>
+        {showServerPicker && (
+          <Grid item xs={12} sm={5}>
+            <TextField
+              select fullWidth size="small" label="Server"
+              value={serverId} onChange={(e) => onServerChange(e.target.value)}
+              disabled={loadingServers}
+              helperText={loadingServers ? 'Loading…' : (servers.length ? '' : 'No public servers')}
+            >
+              {servers.map((s) => (
+                <MenuItem key={s.id} value={String(s.id)}>{serverLabel(s)}</MenuItem>
+              ))}
+            </TextField>
+          </Grid>
+        )}
+        <Grid item xs={12} sm={showServerPicker ? 4 : 8}>
           <TextField
             select fullWidth size="small" label="Zone"
             value={zoneNo} onChange={(e) => setZoneNo(e.target.value)}
             disabled={!zones.length}
-            helperText={loadingZones ? 'Deriving…' : (focusMob == null ? 'Select a mob' : (zones.length ? '' : 'No zones'))}
+            helperText={loadingZones ? 'Deriving…' : (!zonesProvided && focusMob == null ? 'Select a mob' : (zones.length ? '' : 'No zones'))}
           >
             {zones.map((z) => (
-              <MenuItem key={z} value={String(z)}>{zoneNames[z] || `Zone ${z}`}</MenuItem>
+              <MenuItem key={z} value={String(z)}>{zoneLabel(z)}</MenuItem>
             ))}
           </TextField>
         </Grid>
@@ -655,12 +790,12 @@ export default function MonsterMap() {
             )}
 
             {!serverId && emptyHint('Pick a server to begin.')}
-            {serverId && selectedMobs.size === 0 && emptyHint('Select one or more mobs from the list.')}
+            {serverId && selectedMobs.size === 0 && !(allowBareZone && zoneNo) && emptyHint('Select one or more mobs from the list.')}
             {serverId && selectedMobs.size > 0 && !zoneNo && !loadingZones && emptyHint('No zone data for the selected mob(s).')}
-            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && emptyHint('No spawn clusters for this selection.')}
+            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && !allowBareZone && emptyHint('No spawn clusters for this selection.')}
             {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length > 0 && visibleClusters.length === 0 && emptyHint('All spawns hidden by the "Hide seen-once" filter.')}
 
-            {frame && (
+            {activeFrame && (
               <Box sx={{ position: 'relative' }}>
                 {/* Toolbar row — view toggles pulled out of the legend pill so the
                     legend can shrink to just the heat scale. */}
@@ -722,9 +857,9 @@ export default function MonsterMap() {
                       spawn points; framed to the zone AABB. Always mounted (when a
                       bgRect exists) so onLoad/onError can resolve availability, but
                       only painted when confirmed available and the toggle is ON. */}
-                  {bgRect && serverId && zoneNo && (
+                  {bgRect && serverId && zoneNo && zoneMapHref && (
                     <image
-                      href={worldApi.zoneMapUrl(serverId, zoneNo)}
+                      href={zoneMapHref}
                       x={bgRect.x} y={bgRect.y} width={bgRect.width} height={bgRect.height}
                       preserveAspectRatio="none"
                       opacity={showBg ? 1 : 0}
@@ -739,7 +874,7 @@ export default function MonsterMap() {
                   {/* base heat markers — three stacked rings (black outline + white
                       separator + heat fill) so every point reads on any background.
                       Drop-shadow only when the background image is painted. */}
-                  {frame.nodes.map((n, i) => (
+                  {activeFrame.nodes.map((n, i) => (
                     <g key={`${n.c.mob_id}-${i}`} filter={showBg ? 'url(#mmDot)' : undefined}>
                       <circle
                         cx={n.cx} cy={n.cy} r={n.r}
@@ -761,7 +896,7 @@ export default function MonsterMap() {
                   {/* highlight pass — drawn AFTER all base circles so it's on top.
                       Black halo + bright inner ring (reads on any background) +
                       a screen-constant floating label (name + #mob_id). */}
-                  {frame.nodes.filter((n) => isHighlighted(n.c)).map((n, i) => {
+                  {activeFrame.nodes.filter((n) => isHighlighted(n.c)).map((n, i) => {
                     const ls = view.w / SVG_W;                 // screen-constant scale
                     const label = `${mobName(n.c.mob_id)} · #${n.c.mob_id}`;
                     const fontPx = 11, padPx = 5;
@@ -798,7 +933,7 @@ export default function MonsterMap() {
                     Color = spawn density
                   </Typography>
                   <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>
-                    {frame.hasBounds ? 'zone-framed' : 'auto-fit'}
+                    {activeFrame.hasBounds ? 'zone-framed' : 'auto-fit'}
                   </Typography>
                 </Box>
 
@@ -833,6 +968,12 @@ export default function MonsterMap() {
       </Grid>
     </Box>
   );
+}
+
+// User-facing default export: a thin shell over MonsterMapView with no props, so it
+// is byte-for-byte behaviour-identical to the pre-refactor component.
+export default function MonsterMap() {
+  return <MonsterMapView />;
 }
 
 function emptyHint(text) {
