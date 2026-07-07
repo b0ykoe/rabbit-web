@@ -316,6 +316,31 @@ export const serverMergeSchema = z.object({
   dry_run:   z.boolean().optional().default(false),
 });
 
+// ── Admin: Game variants (world, 037) ────────────────────────────────────────
+// The variant LABEL layer (Phase C). name is the join key = game_servers.variant
+// so it is bounded to the same VARCHAR(32) as that column; it is REQUIRED on
+// create and IMMUTABLE afterwards (only display_name/notes/archived are editable).
+//
+// POST /api/admin/world/variants — create a managed variant row. name required
+// (1..32); display_name (≤64) + notes (≤255) optional.
+export const variantCreateSchema = z.object({
+  name:         z.string().min(1).max(32),
+  display_name: z.string().max(64).optional(),
+  notes:        z.string().max(255).optional(),
+});
+
+// PATCH /api/admin/world/variants/:id — edit the label fields only (name is
+// immutable here). display_name may be an explicit null to clear it; archived
+// flips the picker visibility; notes is free-form. At least one field required.
+export const variantUpdateSchema = z.object({
+  display_name: z.string().max(64).nullable().optional(),
+  archived:     z.boolean().optional(),
+  notes:        z.string().max(255).optional(),
+}).refine(
+  d => d.display_name !== undefined || d.archived !== undefined || d.notes !== undefined,
+  { message: 'Provide at least one field to update' },
+);
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function validate(schema) {

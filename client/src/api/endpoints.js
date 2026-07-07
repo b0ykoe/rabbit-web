@@ -69,6 +69,16 @@ export const adminApi = {
   getSettings:    ()           => apiFetch('/api/admin/settings'),
   updateSetting:  (key, data)  => apiFetch(`/api/admin/settings/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
+  // Monster-map game variants (super-admin) — Phase C: variants are managed rows
+  // (the join key stays the free-text `name` string the bot emits). List returns
+  // non-archived by default with server_count per row; create 409s on dup name;
+  // update touches display_name/notes/archived (name is immutable); delete archives
+  // when server_count>0 else hard-deletes.
+  getVariants:   ()          => apiFetch('/api/admin/world/variants'),
+  createVariant: (data)      => apiFetch('/api/admin/world/variants', { method: 'POST', body: JSON.stringify(data) }),
+  updateVariant: (id, data)  => apiFetch(`/api/admin/world/variants/${encodeURIComponent(id)}`, { method: 'PATCH',  body: JSON.stringify(data) }),
+  deleteVariant: (id)        => apiFetch(`/api/admin/world/variants/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // Monster-map ingest tokens (super-admin) — PLAN_v2 §3.9
   getIngestTokens:   ()      => apiFetch('/api/admin/world/ingest-tokens'),
   mintIngestToken:   (data)  => apiFetch('/api/admin/world/ingest-token', { method: 'POST', body: JSON.stringify(data) }),

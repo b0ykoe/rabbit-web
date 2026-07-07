@@ -6,6 +6,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import KeyIcon from '@mui/icons-material/VpnKey';
 import ConfirmationNumberIcon from '@mui/icons-material/ConfirmationNumber';
+import LabelIcon from '@mui/icons-material/Label';
 import { adminApi } from '../../../api/endpoints.js';
 import { useApi } from '../../../hooks/useApi.js';
 import ServerCard from './ServerCard.jsx';
@@ -52,6 +53,12 @@ export default function WorldServersPage() {
             onClick={() => setGrantOpen(true)}
           >
             Grant recording key
+          </Button>
+          <Button
+            size="small" variant="outlined" startIcon={<LabelIcon fontSize="small" />}
+            onClick={() => navigate('/admin/world/variants')}
+          >
+            Manage variants
           </Button>
           <Button
             size="small" variant="text" startIcon={<ConfirmationNumberIcon fontSize="small" />}

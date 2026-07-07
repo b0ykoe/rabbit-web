@@ -26,7 +26,7 @@ import { signToken, generateJti } from '../crypto/ed25519.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
-import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema, serverMergeSchema } from '../validation/schemas.js';
+import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema, serverMergeSchema, variantCreateSchema, variantUpdateSchema } from '../validation/schemas.js';
 
 const router = Router();
 
@@ -455,6 +455,22 @@ router.post('/servers', requireSuperAdmin, validate(serverCreateSchema), async (
       first_seen:   now,
       last_seen:    now,
     });
+
+    // Auto-register the variant into game_variants (037) when it isn't already a
+    // managed row, so an admin-created server with a fresh variant self-registers
+    // into the picker. name is the join key = game_servers.variant. Guarded on
+    // the UNIQUE(name) so a known variant is a no-op (never overwrites labels).
+    const knownVariant = await trx('game_variants').where('name', trimmedVariant).select('id').first();
+    if (!knownVariant) {
+      await trx('game_variants').insert({
+        name:         trimmedVariant,
+        display_name: null,
+        notes:        null,
+        archived:     false,
+        created_at:   now,
+        updated_at:   now,
+      });
+    }
 
     // Seed known IPs; dedupe on the game_server_hosts UNIQUE(ip). A collision
     // (an IP already owned by another server) is skipped, not an error.
@@ -1784,6 +1800,165 @@ router.get('/servers/:id/spawns.csv', requireSuperAdmin, async (req, res) => {
       version: version.kind === 'exact' ? version.version : version.kind, rows: total,
     },
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GAME VARIANT registry (037 — LABEL layer, Phase C). Super-admin + audited.
+// Promotes the free-text game_servers.variant string to a managed row so a GM
+// can name/describe/archive variants and add new ones from the admin panel
+// instead of a hardcoded client list. name is the join key (= game_servers
+// .variant) and is IMMUTABLE after create — there is NO FK, so a bot may still
+// report a never-seen variant first (ingest self-registers it). server_count is
+// COUNT(game_servers WHERE variant = name); a variant still in use is ARCHIVED
+// (not deleted) on DELETE. These carry LABELS only — no offset overrides here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /api/admin/world/variants — list variants with server_count. Non-archived
+// only by default; ?include_archived=1 (or all/true) also returns archived rows.
+router.get('/variants', requireSuperAdmin, async (req, res) => {
+  const inc = String(req.query.include_archived ?? '').toLowerCase();
+  const includeArchived = inc === '1' || inc === 'true' || inc === 'all' || inc === 'yes';
+
+  let q = db('game_variants')
+    .select('id', 'name', 'display_name', 'notes', 'archived', 'created_at', 'updated_at')
+    .orderBy('name', 'asc')
+    .limit(500);
+  if (!includeArchived) q = q.where('archived', false);
+  const rows = await q;
+
+  // server_count = COUNT(game_servers WHERE variant = name), rolled up in ONE
+  // grouped query then mapped by name (a variant with no server → 0).
+  const countRows = await db('game_servers')
+    .whereNotNull('variant')
+    .groupBy('variant')
+    .select('variant', db.raw('COUNT(*) as server_count'));
+  const countMap = Object.fromEntries(countRows.map(c => [c.variant, Number(c.server_count)]));
+
+  for (const r of rows) {
+    r.archived     = !!r.archived;   // normalize mysql2 0/1
+    r.server_count = countMap[r.name] || 0;
+  }
+
+  res.json({ data: rows });
+});
+
+// POST /api/admin/world/variants — create a managed variant. 409 on a duplicate
+// name (the UNIQUE(name) is the authority; we pre-check for a clean message).
+router.post('/variants', requireSuperAdmin, validate(variantCreateSchema), async (req, res) => {
+  const now = nowSec();
+  const name = req.validated.name.trim();
+  if (!name) return res.status(422).json({ error: 'name is required' });
+  const displayName = req.validated.display_name != null ? req.validated.display_name.trim() || null : null;
+  const notes       = req.validated.notes != null ? req.validated.notes.trim() || null : null;
+
+  const existing = await db('game_variants').where('name', name).select('id').first();
+  if (existing) {
+    return res.status(409).json({ error: 'A variant with that name already exists', id: existing.id });
+  }
+
+  const [id] = await db('game_variants').insert({
+    name,
+    display_name: displayName,
+    notes,
+    archived:     false,
+    created_at:   now,
+    updated_at:   now,
+  });
+
+  const row = await db('game_variants').where('id', id).first();
+  row.archived     = !!row.archived;
+  row.server_count = 0;   // brand-new — nothing joins to it yet
+
+  await recordAudit(db, req, {
+    action: 'world.variant.create', subjectType: 'game_variant', subjectId: String(id),
+    newValues: { name, display_name: displayName, notes },
+  });
+
+  res.status(201).json({ data: row });
+});
+
+// PATCH /api/admin/world/variants/:id — edit display_name / notes / archived
+// (name is IMMUTABLE here). Any single field is enough (schema refine).
+router.patch('/variants/:id', requireSuperAdmin, validate(variantUpdateSchema), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad variant id' });
+
+  const existing = await db('game_variants').where('id', id).first();
+  if (!existing) return res.status(404).json({ error: 'Variant not found' });
+
+  const patch = {};
+  if (req.validated.display_name !== undefined) {
+    const dn = req.validated.display_name;
+    patch.display_name = dn == null ? null : dn.trim() || null;
+  }
+  if (req.validated.notes !== undefined) {
+    const n = req.validated.notes;
+    patch.notes = n == null ? null : n.trim() || null;
+  }
+  if (req.validated.archived !== undefined) patch.archived = req.validated.archived;
+
+  if (Object.keys(patch).length) {
+    patch.updated_at = nowSec();
+    await db('game_variants').where('id', id).update(patch);
+  }
+
+  const row = await db('game_variants').where('id', id).first();
+  row.archived = !!row.archived;
+  const cnt = await db('game_servers').where('variant', row.name).count('* as c').first();
+  row.server_count = Number(cnt?.c ?? 0);
+
+  await recordAudit(db, req, {
+    action: 'world.variant.update', subjectType: 'game_variant', subjectId: String(id),
+    oldValues: {
+      display_name: existing.display_name, notes: existing.notes, archived: !!existing.archived,
+    },
+    newValues: patch,
+  });
+
+  res.json({ data: row });
+});
+
+// DELETE /api/admin/world/variants/:id — ARCHIVE-not-delete when in use: if any
+// game_servers row still joins on this variant name (server_count>0), refuse the
+// hard delete (409) and instead flip archived=true. Only when server_count===0
+// is the row actually deleted.
+router.delete('/variants/:id', requireSuperAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: 'Bad variant id' });
+
+  const existing = await db('game_variants').where('id', id).first();
+  if (!existing) return res.status(404).json({ error: 'Variant not found' });
+
+  const cnt = await db('game_servers').where('variant', existing.name).count('* as c').first();
+  const serverCount = Number(cnt?.c ?? 0);
+
+  if (serverCount > 0) {
+    // In use — archive instead of delete so the join key survives.
+    if (!existing.archived) {
+      await db('game_variants').where('id', id).update({ archived: true, updated_at: nowSec() });
+    }
+    await recordAudit(db, req, {
+      action: 'world.variant.archive', subjectType: 'game_variant', subjectId: String(id),
+      oldValues: { archived: !!existing.archived }, newValues: { archived: true, server_count: serverCount },
+    });
+    const row = await db('game_variants').where('id', id).first();
+    row.archived = !!row.archived;
+    row.server_count = serverCount;
+    return res.status(409).json({
+      error: 'Variant is still in use by one or more servers; archived instead of deleted',
+      archived: true,
+      data: row,
+    });
+  }
+
+  await db('game_variants').where('id', id).del();
+  await recordAudit(db, req, {
+    action: 'world.variant.delete', subjectType: 'game_variant', subjectId: String(id),
+    oldValues: { name: existing.name, display_name: existing.display_name, archived: !!existing.archived },
+    newValues: { deleted: true },
+  });
+
+  res.json({ deleted: true });
 });
 
 export default router;
