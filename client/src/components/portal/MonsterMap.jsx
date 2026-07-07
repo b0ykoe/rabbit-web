@@ -4,7 +4,7 @@ import {
   Box, Typography, Paper, Grid, MenuItem, TextField, ToggleButtonGroup,
   ToggleButton, CircularProgress, Alert, Chip, List, ListItem, ListItemButton,
   ListItemText, Checkbox, Divider, InputAdornment, FormControlLabel, Switch,
-  IconButton, Tooltip,
+  IconButton, Tooltip, Stack, Collapse, Button, useMediaQuery, useTheme,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import ZoomInIcon from '@mui/icons-material/ZoomIn';
@@ -61,6 +61,9 @@ function timeAgo(sec) {
 }
 
 export default function MonsterMap() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
   const [servers, setServers]   = useState([]);
   const [serverId, setServerId] = useState('');
   const [loadingServers, setLoadingServers] = useState(true);
@@ -99,6 +102,11 @@ export default function MonsterMap() {
   // and the auto-fit framing. OFF by default so nothing is hidden implicitly.
   const [hideSeenOnce, setHideSeenOnce] = useState(false);
   const RELIABILITY_MIN = 0.15;             // small threshold below which a spot is "unreliable"
+
+  // Mobile-only: the mob checklist collapses to save vertical space. Default open
+  // when nothing is selected yet; auto-collapse once a mob is picked so the map
+  // takes the screen. Desktop ignores this (list always shown).
+  const [mobListOpen, setMobListOpen] = useState(true);
 
   // ── Deep-link from a recording session ("Show on map") ─────────────────────
   // WorldSessions navigates here with react-router state
@@ -214,6 +222,13 @@ export default function MonsterMap() {
       return prev ?? id;
     });
   };
+
+  // Mobile: keep the mob list expanded while nothing is chosen, and collapse it
+  // once a selection exists so the map gets the screen. No-op on desktop.
+  useEffect(() => {
+    if (!isMobile) return;
+    setMobListOpen(selectedMobs.size === 0);
+  }, [isMobile, selectedMobs.size]);
 
   // ── Derive zones for the focus mob via /mobs/:id/spawns ────────────────────
   useEffect(() => {
@@ -545,7 +560,7 @@ export default function MonsterMap() {
             ))}
           </TextField>
         </Grid>
-        <Grid item xs={6} sm={4}>
+        <Grid item xs={12} sm={4}>
           <TextField
             select fullWidth size="small" label="Zone"
             value={zoneNo} onChange={(e) => setZoneNo(e.target.value)}
@@ -557,11 +572,11 @@ export default function MonsterMap() {
             ))}
           </TextField>
         </Grid>
-        <Grid item xs={6} sm={3}>
+        <Grid item xs={12} sm={3}>
           <ToggleButtonGroup
             size="small" exclusive value={version}
             onChange={(_, v) => { if (v) setVersion(v); }}
-            sx={{ height: '100%' }}
+            sx={{ height: '100%', width: '100%', '& .MuiToggleButton-root': { flex: 1 } }}
           >
             <ToggleButton value="latest">Latest</ToggleButton>
             <ToggleButton value="all">All-Time</ToggleButton>
@@ -572,7 +587,7 @@ export default function MonsterMap() {
       <Grid container spacing={2}>
         {/* Mob checklist */}
         <Grid item xs={12} md={4}>
-          <Paper variant="outlined" sx={{ p: 1.5, height: SVG_H, display: 'flex', flexDirection: 'column' }}>
+          <Paper variant="outlined" sx={{ p: 1.5, height: { xs: 320, md: SVG_H }, display: 'flex', flexDirection: 'column' }}>
             <TextField
               size="small" fullWidth placeholder="Search mobs (name or id)"
               value={mobQuery} onChange={(e) => setMobQuery(e.target.value)}
@@ -580,42 +595,57 @@ export default function MonsterMap() {
               InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
               sx={{ mb: 1 }}
             />
-            <Divider sx={{ mb: 0.5 }} />
-            <Box sx={{ flex: 1, overflowY: 'auto' }}>
-              {!serverId && <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>Select a server first.</Typography>}
-              {serverId && loadingMobs && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
-              {serverId && !loadingMobs && mobs.length === 0 && (
-                <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>No mobs found.</Typography>
-              )}
-              <List dense disablePadding>
-                {mobs.map((m) => (
-                  <ListItem key={m.mob_id} disablePadding>
-                    <ListItemButton dense onClick={() => toggleMob(m.mob_id)} sx={{ py: 0 }}>
-                      <Checkbox edge="start" size="small" checked={selectedMobs.has(m.mob_id)} tabIndex={-1} disableRipple />
-                      <ListItemText
-                        primary={mobNames[m.mob_id] || m.name || `Mob #${m.mob_id}`}
-                        secondary={`#${m.mob_id}${m.level_min != null ? ` · Lv ${m.level_min}${m.level_max && m.level_max !== m.level_min ? `-${m.level_max}` : ''}` : ''} · ${m.sightings_total ?? 0} seen`}
-                        primaryTypographyProps={{ variant: 'body2', noWrap: true }}
-                        secondaryTypographyProps={{ variant: 'caption' }}
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                ))}
-              </List>
-            </Box>
-            {selectedMobs.size > 0 && (
-              <Box sx={{ pt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                {[...selectedMobs].map((id) => (
-                  <Chip key={id} size="small" label={mobName(id)} onDelete={() => toggleMob(id)} />
-                ))}
-              </Box>
+            {isMobile && (
+              <Button
+                size="small" variant="text" fullWidth onClick={() => setMobListOpen((o) => !o)}
+                sx={{ mb: 0.5, justifyContent: 'space-between', textTransform: 'none' }}
+              >
+                {mobListOpen ? 'Hide mobs' : `Mobs (${selectedMobs.size} selected)`}
+              </Button>
             )}
+            <Collapse
+              in={!isMobile || mobListOpen}
+              sx={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column',
+                    '& .MuiCollapse-wrapper': { flex: 1, minHeight: 0 },
+                    '& .MuiCollapse-wrapperInner': { display: 'flex', flexDirection: 'column', height: '100%' } }}
+            >
+              <Divider sx={{ mb: 0.5 }} />
+              <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                {!serverId && <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>Select a server first.</Typography>}
+                {serverId && loadingMobs && <Box sx={{ p: 2, textAlign: 'center' }}><CircularProgress size={20} /></Box>}
+                {serverId && !loadingMobs && mobs.length === 0 && (
+                  <Typography variant="caption" color="text.disabled" sx={{ p: 1, display: 'block' }}>No mobs found.</Typography>
+                )}
+                <List dense disablePadding>
+                  {mobs.map((m) => (
+                    <ListItem key={m.mob_id} disablePadding>
+                      <ListItemButton dense onClick={() => toggleMob(m.mob_id)} sx={{ py: 0 }}>
+                        <Checkbox edge="start" size="small" checked={selectedMobs.has(m.mob_id)} tabIndex={-1} disableRipple />
+                        <ListItemText
+                          primary={mobNames[m.mob_id] || m.name || `Mob #${m.mob_id}`}
+                          secondary={`#${m.mob_id}${m.level_min != null ? ` · Lv ${m.level_min}${m.level_max && m.level_max !== m.level_min ? `-${m.level_max}` : ''}` : ''} · ${m.sightings_total ?? 0} seen`}
+                          primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                          secondaryTypographyProps={{ variant: 'caption' }}
+                        />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                </List>
+              </Box>
+              {selectedMobs.size > 0 && (
+                <Box sx={{ pt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {[...selectedMobs].map((id) => (
+                    <Chip key={id} size="small" label={mobName(id)} onDelete={() => toggleMob(id)} />
+                  ))}
+                </Box>
+              )}
+            </Collapse>
           </Paper>
         </Grid>
 
         {/* SVG map */}
         <Grid item xs={12} md={8}>
-          <Paper variant="outlined" sx={{ p: 1.5, position: 'relative', minHeight: SVG_H }}>
+          <Paper variant="outlined" sx={{ p: { xs: 1, md: 1.5 }, position: 'relative', minHeight: { xs: 'auto', md: SVG_H } }}>
             {mapError && <Alert severity="error" sx={{ mb: 1 }}>{mapError}</Alert>}
 
             {loadingMap && (
@@ -632,12 +662,40 @@ export default function MonsterMap() {
 
             {frame && (
               <Box sx={{ position: 'relative' }}>
+                {/* Toolbar row — view toggles pulled out of the legend pill so the
+                    legend can shrink to just the heat scale. */}
+                <Stack direction="row" flexWrap="wrap" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
+                  <FormControlLabel
+                    sx={{ mr: 0 }}
+                    control={
+                      <Switch
+                        size="small" checked={hideSeenOnce}
+                        onChange={(e) => setHideSeenOnce(e.target.checked)}
+                      />
+                    }
+                    label={<Typography variant="caption" color="text.secondary">Hide seen-once</Typography>}
+                  />
+                  {bgRect && bgAvailable && (
+                    <FormControlLabel
+                      sx={{ mr: 0 }}
+                      control={
+                        <Switch
+                          size="small" checked={bgEnabled}
+                          onChange={(e) => setBgEnabled(e.target.checked)}
+                        />
+                      }
+                      label={<Typography variant="caption" color="text.secondary">Background</Typography>}
+                    />
+                  )}
+                </Stack>
                 {/* Zoom / pan controls (wheel = zoom-to-cursor, drag = pan). */}
-                <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 0.5, bgcolor: 'rgba(0,0,0,0.4)', borderRadius: 1, p: 0.25 }}>
-                  <Tooltip title="Zoom in" placement="left"><IconButton size="small" onClick={() => zoomBy(0.7)} sx={{ color: '#fff' }}><ZoomInIcon fontSize="small" /></IconButton></Tooltip>
-                  <Tooltip title="Zoom out" placement="left"><IconButton size="small" onClick={() => zoomBy(1 / 0.7)} sx={{ color: '#fff' }}><ZoomOutIcon fontSize="small" /></IconButton></Tooltip>
-                  <Tooltip title="Reset view" placement="left"><IconButton size="small" onClick={resetView} sx={{ color: '#fff' }}><RestartAltIcon fontSize="small" /></IconButton></Tooltip>
-                </Box>
+                <Paper elevation={3} sx={{ position: 'absolute', top: 40, right: 8, zIndex: 3, p: 0.25 }}>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                    <Tooltip title="Zoom in" placement="left"><IconButton size="small" onClick={() => zoomBy(0.7)}><ZoomInIcon fontSize="small" /></IconButton></Tooltip>
+                    <Tooltip title="Zoom out" placement="left"><IconButton size="small" onClick={() => zoomBy(1 / 0.7)}><ZoomOutIcon fontSize="small" /></IconButton></Tooltip>
+                    <Tooltip title="Reset view" placement="left"><IconButton size="small" onClick={resetView}><RestartAltIcon fontSize="small" /></IconButton></Tooltip>
+                  </Box>
+                </Paper>
                 <svg
                   ref={setSvgRef}
                   viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
@@ -655,6 +713,11 @@ export default function MonsterMap() {
                     }
                     .mm-highlight-ring { animation: mmHighlightPulse 1.3s ease-in-out infinite; }
                   `}</style>
+                  <defs>
+                    <filter id="mmDot">
+                      <feDropShadow dx="0" dy="0" stdDeviation="1.5" floodColor="#000" floodOpacity="0.6" />
+                    </filter>
+                  </defs>
                   {/* background image layer — FIRST child so it sits UNDER the
                       spawn points; framed to the zone AABB. Always mounted (when a
                       bgRect exists) so onLoad/onError can resolve availability, but
@@ -673,18 +736,27 @@ export default function MonsterMap() {
                   {/* frame border */}
                   <rect x={PAD / 2} y={PAD / 2} width={SVG_W - PAD} height={SVG_H - PAD}
                     fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1" rx="4" />
-                  {/* base heat circles */}
+                  {/* base heat markers — three stacked rings (black outline + white
+                      separator + heat fill) so every point reads on any background.
+                      Drop-shadow only when the background image is painted. */}
                   {frame.nodes.map((n, i) => (
-                    <circle
-                      key={`${n.c.mob_id}-${i}`}
-                      cx={n.cx} cy={n.cy} r={n.r}
-                      fill={heatColor(n.t)}
-                      fillOpacity={0.55}
-                      stroke={heatColor(n.t)}
-                      strokeOpacity={0.9}
-                      strokeWidth={1}
-                      onMouseEnter={() => setHover({ n, mobName: mobName(n.c.mob_id) })}
-                    />
+                    <g key={`${n.c.mob_id}-${i}`} filter={showBg ? 'url(#mmDot)' : undefined}>
+                      <circle
+                        cx={n.cx} cy={n.cy} r={n.r}
+                        fill="none" stroke="#000" strokeOpacity={0.85} strokeWidth={3}
+                        vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }}
+                      />
+                      <circle
+                        cx={n.cx} cy={n.cy} r={n.r}
+                        fill="none" stroke="#fff" strokeOpacity={0.55} strokeWidth={1.25}
+                        vectorEffect="non-scaling-stroke" style={{ pointerEvents: 'none' }}
+                      />
+                      <circle
+                        cx={n.cx} cy={n.cy} r={n.r}
+                        fill={heatColor(n.t)} fillOpacity={0.72}
+                        onMouseEnter={() => setHover({ n, mobName: mobName(n.c.mob_id) })}
+                      />
+                    </g>
                   ))}
                   {/* highlight pass — drawn AFTER all base circles so it's on top.
                       Black halo + bright inner ring (reads on any background) +
@@ -698,11 +770,11 @@ export default function MonsterMap() {
                     const by = n.cy - n.r - (7 + hPx) * ls;
                     return (
                       <g key={`hl-${n.c.mob_id}-${i}`} style={{ pointerEvents: 'none' }}>
-                        <circle cx={n.cx} cy={n.cy} r={n.r + 5} fill="none"
-                          stroke="#000" strokeWidth={5} strokeOpacity={0.9}
+                        <circle cx={n.cx} cy={n.cy} r={n.r + 6} fill="none"
+                          stroke="#000" strokeWidth={6} strokeOpacity={0.9}
                           vectorEffect="non-scaling-stroke" />
-                        <circle cx={n.cx} cy={n.cy} r={n.r + 5} fill="none"
-                          stroke="#ffd54a" strokeWidth={2.5} strokeOpacity={0.95}
+                        <circle cx={n.cx} cy={n.cy} r={n.r + 6} fill="none"
+                          stroke="#ffd54a" strokeWidth={3.5} strokeOpacity={0.95}
                           vectorEffect="non-scaling-stroke" className="mm-highlight-ring" />
                         <rect x={n.cx - (wPx * ls) / 2} y={by} width={wPx * ls} height={hPx * ls}
                           rx={3 * ls} fill="rgba(0,0,0,0.82)" stroke="#000" strokeWidth={1.5}
@@ -715,36 +787,19 @@ export default function MonsterMap() {
                   })}
                 </svg>
 
-                {/* legend */}
-                <Box sx={{ position: 'absolute', bottom: 8, left: 8, display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'rgba(0,0,0,0.35)', px: 1, py: 0.5, borderRadius: 1 }}>
-                  <Typography variant="caption" color="text.secondary">Low</Typography>
-                  <Box sx={{ width: 90, height: 8, borderRadius: 1, background: 'linear-gradient(90deg, rgb(33,102,172), rgb(90,174,97), rgb(244,165,66), rgb(214,47,39))' }} />
-                  <Typography variant="caption" color="text.secondary">High</Typography>
-                  <Typography variant="caption" color="text.disabled" sx={{ ml: 1 }}>
+                {/* legend — heat scale only (view toggles live in the toolbar row) */}
+                <Box sx={{ position: 'absolute', bottom: 8, left: 8, maxWidth: 160, bgcolor: 'rgba(0,0,0,0.55)', px: 1, py: 0.5, borderRadius: 1 }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography variant="caption" color="text.secondary">Low</Typography>
+                    <Box sx={{ flex: 1, minWidth: 60, height: 8, borderRadius: 1, background: 'linear-gradient(90deg, rgb(33,102,172), rgb(90,174,97), rgb(244,165,66), rgb(214,47,39))' }} />
+                    <Typography variant="caption" color="text.secondary">High</Typography>
+                  </Box>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                    Color = spawn density
+                  </Typography>
+                  <Typography variant="caption" color="text.disabled" sx={{ display: 'block' }}>
                     {frame.hasBounds ? 'zone-framed' : 'auto-fit'}
                   </Typography>
-                  <FormControlLabel
-                    sx={{ ml: 0.5, mr: 0 }}
-                    control={
-                      <Switch
-                        size="small" checked={hideSeenOnce}
-                        onChange={(e) => setHideSeenOnce(e.target.checked)}
-                      />
-                    }
-                    label={<Typography variant="caption" color="text.secondary">Hide seen-once</Typography>}
-                  />
-                  {bgRect && bgAvailable && (
-                    <FormControlLabel
-                      sx={{ ml: 0.5, mr: 0 }}
-                      control={
-                        <Switch
-                          size="small" checked={bgEnabled}
-                          onChange={(e) => setBgEnabled(e.target.checked)}
-                        />
-                      }
-                      label={<Typography variant="caption" color="text.secondary">Background</Typography>}
-                    />
-                  )}
                 </Box>
 
                 {/* hover tooltip */}
@@ -782,7 +837,7 @@ export default function MonsterMap() {
 
 function emptyHint(text) {
   return (
-    <Box sx={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <Box sx={{ minHeight: { xs: 240, md: 400 }, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <Typography variant="body2" color="text.disabled">{text}</Typography>
     </Box>
   );
