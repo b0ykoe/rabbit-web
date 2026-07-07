@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Typography, Button, Chip, Switch, Tooltip } from '@mui/material';
+import { Box, Typography, Button, Chip } from '@mui/material';
 // Typography is used in column renders via MUI's auto-import
 import AddIcon from '@mui/icons-material/Add';
 import DataTable from '../common/DataTable.jsx';
@@ -22,7 +22,6 @@ export default function Users() {
   const [deleteUser, setDeleteUser]   = useState(null);
   const [creditUser, setCreditUser]   = useState(null);
   const [purchaseUser, setPurchaseUser] = useState(null);
-  const [spawnTogglingId, setSpawnTogglingId] = useState(null);
 
   const handleCreate = async (formData) => {
     await adminApi.createUser(formData);
@@ -49,25 +48,6 @@ export default function Users() {
     showSnackbar('Credits adjusted');
     setCreditUser(null);
     refetch();
-  };
-
-  // First-class shortcut for the spawn_tracking feature flag: writes only
-  // feature_flags.spawn_tracking (merged onto the user's existing flag map) via
-  // the same updateUser PATCH the edit form uses, so nothing else is disturbed.
-  const handleToggleSpawnTracking = async (row) => {
-    const next = !(row.feature_flags?.spawn_tracking);
-    setSpawnTogglingId(row.id);
-    try {
-      await adminApi.updateUser(row.id, {
-        feature_flags: { ...(row.feature_flags || {}), spawn_tracking: next },
-      });
-      showSnackbar(next ? 'Spawn recording enabled' : 'Spawn recording disabled');
-      refetch();
-    } catch (err) {
-      showSnackbar(err.data?.error || err.message || 'Update failed', 'error');
-    } finally {
-      setSpawnTogglingId(null);
-    }
   };
 
   const columns = [
@@ -108,18 +88,6 @@ export default function Users() {
         </Box>
       );
     }},
-    { id: 'spawn_tracking', label: 'Spawn Rec.', align: 'center', render: (row) => (
-      <Tooltip title="Spawn recording (feature_flags.spawn_tracking)">
-        <span>
-          <Switch
-            size="small"
-            checked={!!row.feature_flags?.spawn_tracking}
-            disabled={spawnTogglingId === row.id}
-            onChange={() => handleToggleSpawnTracking(row)}
-          />
-        </span>
-      </Tooltip>
-    )},
     { id: 'license_count', label: 'Keys', align: 'center' },
     {
       id: 'actions', label: '', align: 'right',
