@@ -153,14 +153,36 @@ export const portalApi = {
 // ── World map (user-facing read view) ─────────────────────────────────────────
 // Consumes the existing portal.world.js read API. All GETs (CSRF-exempt).
 
+// ── Cached world reads ───────────────────────────────────────────────────────
+// The Monster Map fans out one clusters+spawns request PER selected mob PER zone,
+// and effects re-run on every mob/zone toggle — uncached that easily trips the
+// portal rate limiter (429). Memoise idempotent GETs by full URL with a short TTL
+// so a burst / re-selection reuses an in-flight-or-recent result instead of
+// re-hitting the server. Concurrent identical requests share one promise (collapse
+// to a single network call); failures are never cached; a page reload (or the TTL)
+// refreshes.
+const WORLD_GET_TTL_MS = 60_000;
+const _worldGetCache = new Map(); // url -> { p: Promise, ts: number }
+function cachedGet(url) {
+  const now = Date.now();
+  const hit = _worldGetCache.get(url);
+  if (hit && now - hit.ts < WORLD_GET_TTL_MS) return hit.p;
+  const p = apiFetch(url).catch((err) => {
+    if (_worldGetCache.get(url)?.p === p) _worldGetCache.delete(url);
+    throw err;
+  });
+  _worldGetCache.set(url, { p, ts: now });
+  return p;
+}
+
 export const worldApi = {
   // Visible servers only (API filters game_servers.visible = true).
-  servers:   ()      => apiFetch('/api/portal/world/servers'),
+  servers:   ()      => cachedGet('/api/portal/world/servers'),
 
   // Mob catalog for a server; optional q matches name LIKE or numeric mob_id.
   mobs:      (sid, q) => {
     const qs = q ? `?${new URLSearchParams({ q }).toString()}` : '';
-    return apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/mobs${qs}`);
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/mobs${qs}`);
   },
 
   // All zones where a given mob spawns → { mob_id, zones:{ "<zone_no>":[...] }, total_cells }.
@@ -168,7 +190,7 @@ export const worldApi = {
   mobSpawns: (sid, mobId, opts = {}) => {
     const qs = (opts.channel !== undefined && opts.channel !== null && opts.channel !== '')
       ? `?${new URLSearchParams({ channel: opts.channel }).toString()}` : '';
-    return apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/mobs/${encodeURIComponent(mobId)}/spawns${qs}`);
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/mobs/${encodeURIComponent(mobId)}/spawns${qs}`);
   },
 
   // Spawn cells for a zone. opts: { version, mob_id, channel, ignore_channels }.
@@ -178,7 +200,7 @@ export const worldApi = {
       if (opts[k] !== undefined && opts[k] !== null && opts[k] !== '') params[k] = opts[k];
     }
     const qs = Object.keys(params).length ? `?${new URLSearchParams(params).toString()}` : '';
-    return apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/spawns${qs}`);
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/spawns${qs}`);
   },
 
   // Clusters for a zone. mob_id is REQUIRED server-side. opts: { mob_id, channel, min_count }.
@@ -188,15 +210,15 @@ export const worldApi = {
       if (opts[k] !== undefined && opts[k] !== null && opts[k] !== '') params[k] = opts[k];
     }
     const qs = Object.keys(params).length ? `?${new URLSearchParams(params).toString()}` : '';
-    return apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/clusters${qs}`);
+    return cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/clusters${qs}`);
   },
 
   // Zone framing bounds (additive portal GET; 404 when absent).
-  zoneBounds: (sid, zone) => apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/bounds`),
+  zoneBounds: (sid, zone) => cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/zones/${encodeURIComponent(zone)}/bounds`),
 
   // Per-server reference name lists (bot-exported) → { zones:{ "<zone_no>":"<name>" },
   // mobs:{ "<mob_id>":"<name>" } }. Used to label zone/mob pickers with real names.
-  names: (sid) => apiFetch(`/api/portal/world/${encodeURIComponent(sid)}/names`),
+  names: (sid) => cachedGet(`/api/portal/world/${encodeURIComponent(sid)}/names`),
 
   // URL of a zone's uploaded background image (same-origin authed GET streamed by
   // the server). Used directly as an <image href> — not fetched via apiFetch, so

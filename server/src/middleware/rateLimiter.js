@@ -80,4 +80,7 @@ export const botWorldLimiter    = createLimiter(60_000, 30, byBotToken);
 
 export const webAuthLimiter = createLimiter(60_000, 10);
 export const adminLimiter   = createLimiter(60_000, 100, bySession);
-export const portalLimiter  = createLimiter(60_000, 60,  bySession);
+// 200/min per session: the Monster Map legitimately fans out clusters+spawns per
+// selected mob on a first zone load (the client now URL-caches these, so repeat
+// browsing is nearly free) — 60 was too tight and tripped 429 on normal use.
+export const portalLimiter  = createLimiter(60_000, 200, bySession);
