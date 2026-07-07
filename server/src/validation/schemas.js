@@ -146,6 +146,116 @@ export const botHeartbeatSchema = z.object({
   })).optional(),
 });
 
+// ── Bot: Monster-map ingest (world) ──────────────────────────────────────────
+// PLAN_v2 §3.6. channel/maxhp/netid are all .optional() so OLDER bots that
+// POST no channel still validate → they land as channel 0 and collapse as
+// today. netid is accepted for optional intra-batch dedup then DROPPED —
+// never stored, never a key [A8]. Coordinates get sane-bounds validation; the
+// sightings array is capped so an authenticated-but-hostile client can't
+// drive a huge upsert.
+const WORLD_COORD_MIN = -100_000;
+const WORLD_COORD_MAX = 100_000;
+
+export const spawnSightingSchema = z.object({
+  mob_id:  z.number().int(),                       // >0 enforced in the route (drop <=0 [A2])
+  name:    z.string().max(96).optional(),
+  level:   z.number().int().min(0).max(1000).optional(),
+  maxhp:   z.number().int().min(0).optional(),
+  channel: z.number().int().min(0).max(65535).optional().default(0),
+  x:       z.number().min(WORLD_COORD_MIN).max(WORLD_COORD_MAX),
+  z:       z.number().min(WORLD_COORD_MIN).max(WORLD_COORD_MAX),
+  y:       z.number().min(WORLD_COORD_MIN).max(WORLD_COORD_MAX),
+  // Bot-side pre-quantized cell index floor((world-origin)/4) [B1]. When present,
+  // stored DIRECTLY so bot + portal grids align; legacy bots omit it → floor(x/4).
+  cell_x:  z.number().int().optional(),
+  cell_z:  z.number().int().optional(),
+  // v2 ADDITIVE deltas — the portal ADDs these onto the row (never re-adds a
+  // cumulative total → no super-linear inflation). All three >= 0; a legacy
+  // migrated cell may send a small 1/1/1 delta (reads as low-confidence). Each
+  // defaults to 0 so a delta that omits one dimension still validates.
+  // Per-sighting delta caps TIGHTENED (hardening): one drained cell in a single
+  // scan session realistically contributes only a handful of hits/passes and a
+  // modest instance_sum. The prior 1e6 / 1e8 ceilings let a hostile-but-authed
+  // client inflate a cell arbitrarily in one batch. Additive tightening only —
+  // fields stay optional + default 0, so a legacy/partial delta still validates.
+  hits_delta:         z.number().int().min(0).max(10_000).optional().default(0),
+  passes_delta:       z.number().int().min(0).max(10_000).optional().default(0),
+  instance_sum_delta: z.number().int().min(0).max(100_000).optional().default(0),
+  // Optional distinct-run guard. When present and != the stored last_*_run_id
+  // the delta is applied and the run_id stored (keeps hits/passes distinct-runs).
+  // Accept either a JS number or a bigint-as-string (JSON can't hold a bigint).
+  run_id:  z.union([z.number().int().nonnegative(), z.string().regex(/^\d+$/)]).optional(),
+  netid:   z.number().int().optional(),            // dedup-only, never persisted [A8]
+});
+
+export const spawnIngestSchema = z.object({
+  token:  z.string().optional(),                   // consumed by validateSpawnIngest, ignored here
+  server: z.object({
+    ip:      z.string().min(1).max(45),
+    variant: z.string().min(1).max(32),
+    port:    z.string().max(8).optional(),
+  }),
+  zone_no:   z.number().int().min(0).max(65535),
+  sightings: z.array(spawnSightingSchema).min(1).max(200),
+});
+
+export const zoneBoundsSchema = z.object({
+  token:  z.string().optional(),
+  server: z.object({
+    ip:      z.string().min(1).max(45),
+    variant: z.string().min(1).max(32),
+    port:    z.string().max(8).optional(),
+  }),
+  zone_no:          z.number().int().min(0).max(65535),
+  origin_x:         z.number(),
+  origin_z:         z.number(),
+  world_min_x:      z.number(),
+  world_min_z:      z.number(),
+  world_max_x:      z.number(),
+  world_max_z:      z.number(),
+  size_px:          z.number().int().positive().max(16384).optional(),
+  meters_per_pixel: z.number().positive().optional(),
+  cell_size_m:      z.number().positive().optional().default(4),
+});
+
+// ── Portal: Monster-map versioned read (world) ───────────────────────────────
+// STEP 3 versioned-spots read guard for the optional ?version query on
+// GET /:serverId/zones/:zoneNo/spawns. Lightweight + ADDITIVE — it does NOT
+// touch spawnSightingSchema (run_id there stays optional). Accepts:
+//   absent / 'all' → all-time (legacy) path
+//   'latest'       → newest revision per spot
+//   numeric string → an exact version bucket (bigint carried as a string)
+// The route itself parses this (parseVersionParam); this schema is exported for
+// reuse/tests and mirrors that contract without tightening anything else.
+export const versionQuerySchema = z.object({
+  version: z.union([
+    z.enum(['all', 'latest']),
+    z.string().regex(/^\d+$/),
+  ]).optional(),
+});
+
+// ── Admin: Monster-map ingest tokens (world) ─────────────────────────────────
+export const ingestTokenMintSchema = z.object({
+  user_id:     z.coerce.number().int().positive().optional(),
+  license_key: z.string().min(1).max(32).optional(),
+  // Seeding-key window: default 6h (short-lived), hard-capped at 72h. Threaded
+  // into the token exp + the issued_ingest_tokens.expires_at so both stay coherent.
+  duration_hours: z.coerce.number().int().min(1).max(72).optional().default(6),
+}).refine(d => d.user_id != null || d.license_key, {
+  message: 'Provide user_id or license_key',
+});
+
+// ── Admin: Monster-map per-server management (world) ──────────────────────────
+// PATCH /api/admin/world/servers/:id — edit display_name and/or visible. Both
+// fields are optional so a caller can flip just one; at least one must be
+// present. display_name is a trimmed string (≤128) or an explicit null to clear.
+export const serverUpdateSchema = z.object({
+  display_name: z.string().max(128).nullable().optional(),
+  visible:      z.boolean().optional(),
+}).refine(d => d.display_name !== undefined || d.visible !== undefined, {
+  message: 'Provide display_name and/or visible',
+});
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function validate(schema) {

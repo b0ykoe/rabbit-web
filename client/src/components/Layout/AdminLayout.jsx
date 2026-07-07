@@ -11,6 +11,7 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SensorsIcon from '@mui/icons-material/Sensors';
 import HistoryIcon from '@mui/icons-material/History';
 import AnnouncementIcon from '@mui/icons-material/Announcement';
+import PublicIcon from '@mui/icons-material/Public';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
 import StorefrontIcon from '@mui/icons-material/Storefront';
@@ -27,6 +28,7 @@ const navItems = [
   { label: 'Sessions',  icon: <SensorsIcon />,     path: '/admin/sessions' },
   { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
+  { label: 'Monster Map', icon: <PublicIcon />,    path: '/admin/world' },
   { label: 'Settings',  icon: <SettingsIcon />,    path: '/admin/settings' },
 ];
 

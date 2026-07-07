@@ -9,10 +9,12 @@ import { useAuth } from '../../context/AuthContext.jsx';
 const isAdminRole = (r) => r === 'admin' || r === 'super_admin';
 
 const navItems = [
-  { label: 'Dashboard', path: '/portal' },
-  { label: 'My Keys',   path: '/portal/keys' },
-  { label: 'Sessions',  path: '/portal/sessions' },
-  { label: 'Shop',      path: '/portal/shop' },
+  { label: 'Dashboard',   path: '/portal' },
+  { label: 'My Keys',     path: '/portal/keys' },
+  { label: 'Sessions',    path: '/portal/sessions' },
+  { label: 'Recording',   path: '/portal/recording-sessions' },
+  { label: 'Monster Map', path: '/portal/world' },
+  { label: 'Shop',        path: '/portal/shop' },
 ];
 
 export default function PortalLayout() {

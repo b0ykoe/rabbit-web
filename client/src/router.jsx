@@ -16,12 +16,15 @@ import Sessions from './components/admin/Sessions.jsx';
 import Statuses from './components/admin/Statuses.jsx';
 import AuditLog from './components/admin/AuditLog.jsx';
 import AdminSettings from './components/admin/Settings.jsx';
+import AdminWorld from './components/admin/World.jsx';
 
 // Portal
 import PortalDashboard from './components/portal/Dashboard.jsx';
 import Keys from './components/portal/Keys.jsx';
 import Shop from './components/portal/Shop.jsx';
 import PortalSessions from './components/portal/Sessions.jsx';
+import WorldSessions from './components/portal/WorldSessions.jsx';
+import MonsterMap from './components/portal/MonsterMap.jsx';
 
 export default function AppRouter() {
   return (
@@ -49,6 +52,7 @@ export default function AppRouter() {
         <Route path="sessions" element={<Sessions />} />
         <Route path="statuses" element={<Statuses />} />
         <Route path="audit" element={<AuditLog />} />
+        <Route path="world" element={<AdminWorld />} />
         <Route path="settings" element={<AdminSettings />} />
       </Route>
 
@@ -61,7 +65,9 @@ export default function AppRouter() {
         <Route index element={<PortalDashboard />} />
         <Route path="keys" element={<Keys />} />
         <Route path="sessions" element={<PortalSessions />} />
+        <Route path="recording-sessions" element={<WorldSessions />} />
         <Route path="shop" element={<Shop />} />
+        <Route path="world" element={<MonsterMap />} />
       </Route>
 
       {/* Default redirect */}

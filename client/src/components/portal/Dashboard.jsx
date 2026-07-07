@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Grid, Box, Typography, Paper, Chip, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -6,10 +6,87 @@ import {
 } from '@mui/material';
 import FiberManualRecordIcon from '@mui/icons-material/FiberManualRecord';
 import DownloadIcon from '@mui/icons-material/Download';
-import { portalApi } from '../../api/endpoints.js';
+import { portalApi, worldApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { getChannelColor } from '../../utils/format.js';
+
+// Live countdown label for a recording key. remaining_seconds is a snapshot from
+// the server; we tick it down locally each second. Revoked/expired states win.
+function keyCountdown(status, remainingBase, tick) {
+  if (status === 'revoked') return { label: 'revoked', color: 'error.main' };
+  const remaining = Math.max(0, (remainingBase ?? 0) - tick);
+  if (status === 'expired' || remaining <= 0) return { label: 'expired', color: 'text.disabled' };
+  const h = Math.floor(remaining / 3600);
+  const m = Math.floor((remaining % 3600) / 60);
+  const s = remaining % 60;
+  const label = h > 0 ? `${h}h ${m}m ${s}s` : (m > 0 ? `${m}m ${s}s` : `${s}s`);
+  return { label, color: 'success.main' };
+}
+
+function RecordingCard() {
+  const { data: rec } = useApi(() => worldApi.myRecordingStatus(), []);
+  const { data: tokens } = useApi(() => worldApi.myTokens(), []);
+  const [tick, setTick] = useState(0);
+
+  // One shared 1s ticker drives every key's live countdown.
+  useEffect(() => {
+    const t = setInterval(() => setTick((v) => v + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const enabled = !!rec?.spawn_tracking;
+  const keys = tokens?.data || [];
+
+  return (
+    <Box sx={{ mb: 4 }}>
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Recording
+      </Typography>
+      <Paper sx={{ p: 2.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <FiberManualRecordIcon sx={{ fontSize: 10, color: enabled ? 'success.main' : 'text.disabled' }} />
+          {enabled ? (
+            <Typography variant="body2" color="success.main" fontWeight={600}>Recording: Enabled</Typography>
+          ) : (
+            <Typography variant="body2" color="text.disabled">Not enabled — contact an admin</Typography>
+          )}
+        </Box>
+
+        {keys.length > 0 && (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', mb: 1 }}>
+              My recording keys
+            </Typography>
+            {keys.map((k) => {
+              const cd = keyCountdown(k.status, k.remaining_seconds, tick);
+              return (
+                <Box key={k.jti} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.5, flexWrap: 'wrap' }}>
+                  <Typography variant="caption" fontFamily="monospace" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
+                    {k.jti}
+                  </Typography>
+                  {k.scope && (
+                    <Chip label={k.scope} size="small" variant="outlined" sx={{ height: 18, fontSize: '0.65rem' }} />
+                  )}
+                  <Chip
+                    label={k.revoked ? 'revoked' : (k.status || 'active')}
+                    size="small"
+                    variant="outlined"
+                    color={k.revoked ? 'error' : (k.status === 'active' ? 'success' : 'default')}
+                    sx={{ height: 18, fontSize: '0.65rem' }}
+                  />
+                  <Typography variant="caption" fontWeight={600} sx={{ ml: 'auto', color: cd.color }}>
+                    {cd.label}
+                  </Typography>
+                </Box>
+              );
+            })}
+          </Box>
+        )}
+      </Paper>
+    </Box>
+  );
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -106,6 +183,9 @@ export default function Dashboard() {
           </Paper>
         </Grid>
       </Grid>
+
+      {/* Recording status + own ingest keys (live countdown) */}
+      <RecordingCard />
 
       {/* Downloads — compact table */}
       {loaderReleases?.length > 0 && (

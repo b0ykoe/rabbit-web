@@ -25,6 +25,10 @@ const ALL_FEATURES_TRUE = Object.freeze({
   dev_terrain: true, dev_debug: true, dev_chat: true,
   dev_inventory: true, dev_buffs: true, dev_anticheat: true,
   dev_packets: true,
+  // Monster-map / spawn-tracking (PLAN_v2 §3.8, [C5]). Added here so the
+  // super-admin bypass grants it too — the ingest gate is
+  // `role==='super_admin' || feature_flags.spawn_tracking`.
+  spawn_tracking: true,
 });
 
 const router = Router();

@@ -24,6 +24,7 @@ const FEATURE_FLAG_GROUPS = [
     { key: 'consumables', label: 'Consumables' },
     { key: 'hwid_spoof',  label: 'HWID Spoof' },
     { key: 'ip_profiles', label: 'IP Profiles (SOCKS5)' },
+    { key: 'spawn_tracking', label: 'Spawn Tracking' },
   ]},
   { label: 'Developer', flags: [
     { key: 'dev',            label: 'Dev (Master)' },

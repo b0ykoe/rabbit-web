@@ -69,6 +69,15 @@ export const botInfoLimiter      = createLimiter(60_000, 120, byBotToken);
 // and concurrent saves from a DLL. IP-shared 30/min was insufficient for
 // even a single loader and made multi-instance unusable.
 export const botConfigLimiter   = createLimiter(60_000, 200, byBotToken);
+
+// Per-token bucket for the monster-map ingest route. Keyed on the raw
+// token (same as botConfigLimiter) since it runs BEFORE validateSpawnIngest
+// populates req.botToken — so multiple bot instances on one NAT'd IP don't
+// share a quota. Upload cadence is ~1/min (heartbeat-piggybacked, [C1]);
+// 30/min leaves generous headroom for bursts/retries without letting a
+// single credential flood the ingest pipeline.
+export const botWorldLimiter    = createLimiter(60_000, 30, byBotToken);
+
 export const webAuthLimiter = createLimiter(60_000, 10);
 export const adminLimiter   = createLimiter(60_000, 100, bySession);
 export const portalLimiter  = createLimiter(60_000, 60,  bySession);

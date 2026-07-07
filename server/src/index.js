@@ -13,7 +13,7 @@ import { requireAuth, requireAdmin, checkForcePasswordChange } from './middlewar
 import { startSessionCleanup } from './services/sessionCleanup.js';
 import {
   botLoginLimiter, botAuthStartLimiter, botHeartbeatLimiter, botEndLimiter,
-  botDownloadLimiter, botInfoLimiter, botConfigLimiter,
+  botDownloadLimiter, botInfoLimiter, botConfigLimiter, botWorldLimiter,
   webAuthLimiter, adminLimiter, portalLimiter,
 } from './middleware/rateLimiter.js';
 
@@ -23,6 +23,7 @@ import botAuthRoutes        from './routes/bot.auth.js';
 import botDownloadRoutes    from './routes/bot.download.js';
 import botConfigRoutes      from './routes/bot.config.js';
 import botConfigRecordsRoutes from './routes/bot.config.records.js';
+import botWorldRoutes       from './routes/bot.world.js';
 import portalShareRoutes    from './routes/portal.share.js';
 import adminDashboardRoutes from './routes/admin.dashboard.js';
 import adminUsersRoutes     from './routes/admin.users.js';
@@ -31,6 +32,7 @@ import adminReleasesRoutes  from './routes/admin.releases.js';
 import adminSessionsRoutes  from './routes/admin.sessions.js';
 import adminAuditRoutes     from './routes/admin.audit.js';
 import adminStatusesRoutes  from './routes/admin.statuses.js';
+import adminWorldRoutes     from './routes/admin.world.js';
 import portalDashboardRoutes from './routes/portal.dashboard.js';
 import portalKeysRoutes     from './routes/portal.keys.js';
 import portalRedeemRoutes   from './routes/portal.redeem.js';
@@ -39,6 +41,7 @@ import portalDownloadRoutes from './routes/portal.download.js';
 import portalStatusesRoutes from './routes/portal.statuses.js';
 import portalResetHwidRoutes from './routes/portal.reset-hwid.js';
 import portalSessionsRoutes from './routes/portal.sessions.js';
+import portalWorldRoutes    from './routes/portal.world.js';
 import adminSettingsRoutes  from './routes/admin.settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -94,6 +97,7 @@ app.use('/api/bot/download',       botDownloadLimiter);
 app.use('/api/bot/version',        botInfoLimiter);
 app.use('/api/bot/changelog',      botInfoLimiter);
 app.use('/api/bot/config',         botConfigLimiter);
+app.use('/api/bot/world',          botWorldLimiter);   // per-token ingest limiter
 
 // Web (applied before session/CSRF so rate limit rejects early)
 app.use('/api/auth',               webAuthLimiter);
@@ -115,6 +119,7 @@ app.use('/api/bot/auth',     botAuthRoutes);
 // are now backed by the same tables via a shim.
 app.use('/api/bot/config',   botConfigRecordsRoutes);
 app.use('/api/bot/config',   botConfigRoutes);
+app.use('/api/bot/world',    botWorldRoutes);
 app.use('/api/bot',          botDownloadRoutes);
 
 // ── Web Auth Routes ──────────────────────────────────────────────────────────
@@ -145,6 +150,7 @@ app.use('/api/admin/sessions',  adminSessionsRoutes);
 app.use('/api/admin/audit',     adminAuditRoutes);
 app.use('/api/admin/statuses',  adminStatusesRoutes);
 app.use('/api/admin/settings',  adminSettingsRoutes);
+app.use('/api/admin/world',     adminWorldRoutes);
 
 // ── Portal API Routes ────────────────────────────────────────────────────────
 
@@ -156,6 +162,7 @@ app.use('/api/portal/shop',      portalShopRoutes);
 app.use('/api/portal/download',  portalDownloadRoutes);
 app.use('/api/portal/reset-hwid', portalResetHwidRoutes);
 app.use('/api/portal/sessions',  portalSessionsRoutes);
+app.use('/api/portal/world',     portalWorldRoutes);
 
 // ── Public share landing page (no auth) ──────────────────────────────────────
 // Server-rendered HTML at /share/:id. Mounted before the SPA fallback so
