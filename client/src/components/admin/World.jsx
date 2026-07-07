@@ -757,6 +757,7 @@ function ServerOverviewBody({ server }) {
   const [mobQuery, setMobQuery] = useState('');
   const [npcQuery, setNpcQuery] = useState('');
   const [importing, setImporting] = useState(false);   // name-list import in flight
+  const [boundsBusyZone, setBoundsBusyZone] = useState(null);   // zone_no with a calib.json upload in flight
 
   const loadOverview = async () => {
     setLoadingOv(true);
@@ -800,6 +801,25 @@ function ServerOverviewBody({ server }) {
       showSnackbar(err.data?.error || err.message || 'Import failed', 'error');
     } finally {
       setImporting(false);
+    }
+  };
+
+  // Import a bot-exported zone_<N>_calib.json to set this zone's zone_bounds so
+  // its background renders framed (accurate) instead of auto-fit. Single-file
+  // multipart upload; refreshes the overview on success (has_bounds flips true).
+  const handleImportBounds = async (zoneNo, e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+    setBoundsBusyZone(zoneNo);
+    try {
+      await adminApi.importZoneBounds(server.id, zoneNo, file);
+      showSnackbar(`Bounds for zone ${zoneNo} imported`);
+      await loadOverview();
+    } catch (err) {
+      showSnackbar(err.data?.error || err.message || 'Bounds import failed', 'error');
+    } finally {
+      setBoundsBusyZone(null);
     }
   };
 
@@ -866,6 +886,10 @@ function ServerOverviewBody({ server }) {
             which writes the lists to a local file. Import that <strong>names.json</strong> (or a
             <code> zones.csv</code>/<code>mobs.csv</code>/<code>npcs.csv</code>) here to update the reference
             lists — a JSON file replaces all three lists, a CSV replaces just the one it contains.
+            <br />
+            Per-zone <strong>bounds</strong> come from the bot's map export
+            (<code>zone_&lt;N&gt;_calib.json</code>): upload one in the coverage table below to frame that zone's
+            background <strong>accurately</strong>. Without bounds the background is auto-fit (approximate).
           </Alert>
 
           {/* Zone coverage table */}
@@ -895,7 +919,21 @@ function ServerOverviewBody({ server }) {
                           : <Typography variant="caption" color="text.disabled">(unnamed)</Typography>}
                       </TableCell>
                       <TableCell align="center"><BoolCell ok={!!z.has_data} /></TableCell>
-                      <TableCell align="center"><BoolCell ok={!!z.has_bounds} /></TableCell>
+                      <TableCell align="center">
+                        <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
+                          <BoolCell ok={!!z.has_bounds} />
+                          {boundsBusyZone === z.zone_no ? (
+                            <CircularProgress size={16} />
+                          ) : (
+                            <Tooltip title={z.has_bounds ? 'Re-upload calib.json (bot map export)' : 'Upload calib.json (bot map export) to frame the background'}>
+                              <IconButton component="label" size="small" disabled={boundsBusyZone != null}>
+                                <CloudUploadIcon fontSize="small" />
+                                <input type="file" hidden accept=".json" onChange={(e) => handleImportBounds(z.zone_no, e)} />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
+                      </TableCell>
                       <TableCell align="center"><BoolCell ok={!!z.has_background} /></TableCell>
                     </TableRow>
                   ))}

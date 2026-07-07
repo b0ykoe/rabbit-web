@@ -3,8 +3,11 @@
 //
 //   POST /api/bot/world/spawns       — batch of monster sightings → upsert
 //                                       game_servers / mob_catalog / mob_spawn_cells.
-//   POST /api/bot/world/zone-bounds  — persist a zone's bounds/origin [B2] from
-//                                       the export calibration sidecar [B3].
+//
+// Zone bounds/origin are NOT ingested here: they are set by a super_admin who
+// uploads the bot's export calibration sidecar (calib.json) via
+// POST /api/admin/world/servers/:id/zones/:zoneNo/bounds (admin.world.js),
+// matching the admin-only-upload security model used for names + background maps.
 //
 // Middleware order (constraints [D4]/[D2]/[D1]/[D3]):
 //   validateSpawnIngest  (auth BEFORE body parse — reject forged requests
@@ -28,7 +31,7 @@ import { Router } from 'express';
 import db from '../db.js';
 import { validateSpawnIngest } from '../middleware/spawnIngest.js';
 import {
-  validate, spawnIngestSchema, zoneBoundsSchema,
+  validate, spawnIngestSchema,
   sessionStartSchema, sessionStopSchema,
 } from '../validation/schemas.js';
 
@@ -544,60 +547,6 @@ router.post('/spawns',
       cells: cellAgg.size,
       mobs:  mobAgg.size,
     });
-  });
-
-// ── POST /zone-bounds ────────────────────────────────────────────────────────
-// Persist bounds/origin captured at export time [B2][B3]. Latest-wins upsert.
-router.post('/zone-bounds',
-  validateSpawnIngest,
-  validate(zoneBoundsSchema),
-  async (req, res) => {
-    const userId = await requireSpawnTracking(req, res);
-    if (userId == null) return;
-
-    const b = req.validated;
-    const now = nowSec();
-
-    // Resolve the admin-defined named server (034); same hard contract as /spawns.
-    const resolved = await resolveServerId(b);
-    if (resolved.notFound) {
-      return res.status(404).json({ error: 'Unknown server_id' });
-    }
-    const serverId = resolved.id;
-    if (serverId == null) {
-      return res.status(400).json({ error: 'Could not resolve server (provide server_id)' });
-    }
-
-    await db('zone_bounds')
-      .insert({
-        server_id:        serverId,
-        zone_no:          b.zone_no,
-        origin_x:         b.origin_x,
-        origin_z:         b.origin_z,
-        world_min_x:      b.world_min_x,
-        world_min_z:      b.world_min_z,
-        world_max_x:      b.world_max_x,
-        world_max_z:      b.world_max_z,
-        size_px:          b.size_px ?? null,
-        meters_per_pixel: b.meters_per_pixel ?? null,
-        cell_size_m:      b.cell_size_m ?? 4,
-        updated_at:       now,
-      })
-      .onConflict(['server_id', 'zone_no'])
-      .merge({
-        origin_x:         b.origin_x,
-        origin_z:         b.origin_z,
-        world_min_x:      b.world_min_x,
-        world_min_z:      b.world_min_z,
-        world_max_x:      b.world_max_x,
-        world_max_z:      b.world_max_z,
-        size_px:          b.size_px ?? null,
-        meters_per_pixel: b.meters_per_pixel ?? null,
-        cell_size_m:      b.cell_size_m ?? 4,
-        updated_at:       now,
-      });
-
-    res.json({ ok: true, server_id: serverId, zone_no: b.zone_no });
   });
 
 // ── POST /session/start ──────────────────────────────────────────────────────

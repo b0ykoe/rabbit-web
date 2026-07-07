@@ -245,28 +245,6 @@ export const sessionStopSchema = z.object({
   ended_sec:  z.number().int().nonnegative().optional(),
 });
 
-export const zoneBoundsSchema = z.object({
-  token:  z.string().optional(),
-  // Admin-defined NAMED server (034). Authoritative when present; the ip/variant
-  // hint is now OPTIONAL and used only as a fallback resolve.
-  server_id: z.coerce.number().int().positive().optional(),
-  server: z.object({
-    ip:      z.string().min(1).max(45),
-    variant: z.string().min(1).max(32),
-    port:    z.string().max(8).optional(),
-  }).optional(),
-  zone_no:          z.number().int().min(0).max(65535),
-  origin_x:         z.number(),
-  origin_z:         z.number(),
-  world_min_x:      z.number(),
-  world_min_z:      z.number(),
-  world_max_x:      z.number(),
-  world_max_z:      z.number(),
-  size_px:          z.number().int().positive().max(16384).optional(),
-  meters_per_pixel: z.number().positive().optional(),
-  cell_size_m:      z.number().positive().optional().default(4),
-});
-
 // ── Portal: Monster-map versioned read (world) ───────────────────────────────
 // STEP 3 versioned-spots read guard for the optional ?version query on
 // GET /:serverId/zones/:zoneNo/spawns. Lightweight + ADDITIVE — it does NOT

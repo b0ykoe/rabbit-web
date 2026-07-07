@@ -901,6 +901,129 @@ router.post('/servers/:id/import-names', requireSuperAdmin, namesUploadSingle, a
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Per-(server, zone) FRAMED BOUNDS import (029 zone_bounds). Super-admin-only +
+// audited. The bot map export writes a zone_<zoneNo>_calib.json sidecar carrying
+// the zone's origin + world-extent + pixel scale; a super_admin uploads ONE such
+// file here and it sets zone_bounds for (server, zone) so the uploaded background
+// renders FRAMED (accurately projected) instead of the auto-fit approximation.
+// The old bot ingest for bounds was DEAD (no bot ever called it) and is removed —
+// bounds now follow the same admin-only-upload model as names + background maps.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// POST /api/admin/world/servers/:id/zones/:zoneNo/bounds — upload the bot's
+// calib.json (field 'file') to set zone_bounds for (server, zone). The file is
+// tiny, so it reuses the 16 MB namesUploadSingle wrapper (clean 400 on over-limit).
+// Same UPSERT shape as the removed bot /zone-bounds handler (insert + onConflict
+// merge on (server_id, zone_no)); the 6 geometry fields are required + finite,
+// size_px / meters_per_pixel / cell_size_m are optional (→ null / default 4).
+router.post('/servers/:id/zones/:zoneNo/bounds', requireSuperAdmin, namesUploadSingle, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const zoneNo   = parseInt(req.params.zoneNo, 10);
+
+  // Clean up the staged temp file on ANY return (mirror the names/zone-map handlers).
+  const cleanupTmp = () => { try { if (req.file) fs.unlinkSync(req.file.path); } catch { /* ignore */ } };
+
+  if (!Number.isFinite(serverId) || serverId < 0 || !Number.isFinite(zoneNo) || zoneNo < 0) {
+    cleanupTmp();
+    return res.status(400).json({ error: 'Bad server id / zone' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'File is required (field "file")' });
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) { cleanupTmp(); return res.status(404).json({ error: 'Server not found' }); }
+
+  // Read + parse the staged calib.json.
+  let text;
+  try { text = fs.readFileSync(req.file.path, 'utf8'); }
+  catch { cleanupTmp(); return res.status(400).json({ error: 'Could not read upload' }); }
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);   // strip UTF-8 BOM
+
+  let calib;
+  try { calib = JSON.parse(text); }
+  catch { cleanupTmp(); return res.status(400).json({ error: 'Invalid calib JSON' }); }
+  if (!calib || typeof calib !== 'object' || Array.isArray(calib)) {
+    cleanupTmp();
+    return res.status(400).json({ error: 'Invalid calib JSON' });
+  }
+
+  // Footgun guard: if the file names a numeric zone_no and it disagrees with the
+  // URL zone, reject so an admin can't silently stamp the wrong zone's frame.
+  if (typeof calib.zone_no === 'number' && Number.isFinite(calib.zone_no) && calib.zone_no !== zoneNo) {
+    cleanupTmp();
+    return res.status(400).json({ error: `calib.json is for zone ${calib.zone_no}, not ${zoneNo}` });
+  }
+
+  // The 6 geometry fields are REQUIRED + finite.
+  const GEOM = ['origin_x', 'origin_z', 'world_min_x', 'world_min_z', 'world_max_x', 'world_max_z'];
+  const geom = {};
+  for (const f of GEOM) {
+    const v = calib[f];
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      cleanupTmp();
+      return res.status(400).json({ error: `Missing or non-finite field "${f}"` });
+    }
+    geom[f] = v;
+  }
+
+  // Optional scale fields → null / default. size_px must be a finite int if given;
+  // meters_per_pixel / cell_size_m finite numbers if given (else fall back).
+  const sizePx = (typeof calib.size_px === 'number' && Number.isFinite(calib.size_px))
+    ? Math.trunc(calib.size_px) : null;
+  const metersPerPixel = (typeof calib.meters_per_pixel === 'number' && Number.isFinite(calib.meters_per_pixel))
+    ? calib.meters_per_pixel : null;
+  const cellSizeM = (typeof calib.cell_size_m === 'number' && Number.isFinite(calib.cell_size_m))
+    ? calib.cell_size_m : 4;
+
+  const now = nowSec();
+
+  // UPSERT zone_bounds — EXACT insert + onConflict([server_id,zone_no]).merge(...)
+  // shape carried over from the removed bot /zone-bounds handler.
+  await db('zone_bounds')
+    .insert({
+      server_id:        serverId,
+      zone_no:          zoneNo,
+      origin_x:         geom.origin_x,
+      origin_z:         geom.origin_z,
+      world_min_x:      geom.world_min_x,
+      world_min_z:      geom.world_min_z,
+      world_max_x:      geom.world_max_x,
+      world_max_z:      geom.world_max_z,
+      size_px:          sizePx ?? null,
+      meters_per_pixel: metersPerPixel ?? null,
+      cell_size_m:      cellSizeM ?? 4,
+      updated_at:       now,
+    })
+    .onConflict(['server_id', 'zone_no'])
+    .merge({
+      origin_x:         geom.origin_x,
+      origin_z:         geom.origin_z,
+      world_min_x:      geom.world_min_x,
+      world_min_z:      geom.world_min_z,
+      world_max_x:      geom.world_max_x,
+      world_max_z:      geom.world_max_z,
+      size_px:          sizePx ?? null,
+      meters_per_pixel: metersPerPixel ?? null,
+      cell_size_m:      cellSizeM ?? 4,
+      updated_at:       now,
+    });
+
+  cleanupTmp();
+
+  await recordAudit(db, req, {
+    action: 'world.bounds.import', subjectType: 'zone_bounds', subjectId: `${serverId}:${zoneNo}`,
+    newValues: {
+      orig_name: (req.file.originalname || '').slice(0, 255) || null,
+      origin_x: geom.origin_x, origin_z: geom.origin_z,
+      world_min_x: geom.world_min_x, world_min_z: geom.world_min_z,
+      world_max_x: geom.world_max_x, world_max_z: geom.world_max_z,
+      size_px: sizePx, meters_per_pixel: metersPerPixel, cell_size_m: cellSizeM,
+    },
+  });
+
+  res.json({ ok: true, zone_no: zoneNo });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Zone background-map images (031_zone_maps). Super-admin-only + audited.
 // ─────────────────────────────────────────────────────────────────────────────
 

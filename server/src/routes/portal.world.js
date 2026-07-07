@@ -590,8 +590,9 @@ router.get('/:serverId/zones/:zoneNo/clusters', async (req, res) => {
 
 // ── GET /:serverId/zones/:zoneNo/bounds ──────────────────────────────────────
 // Zone framing for the user map SVG. The zone_bounds table (migration 029) is
-// populated by the bot ingest route POST /api/bot/world/zone-bounds; no portal
-// route surfaced it before. Cells are 4 m: world = origin + cell*cell_size_m.
+// populated by the super-admin upload POST /api/admin/world/servers/:id/zones/
+// :zoneNo/bounds (the bot's map-export calib.json). Cells are 4 m: world =
+// origin + cell*cell_size_m.
 // Returns the single bounds row for (server, zone) or 404 when the bot has not
 // yet reported bounds for that zone. Read-only, ADDITIVE.
 router.get('/:serverId/zones/:zoneNo/bounds', async (req, res) => {

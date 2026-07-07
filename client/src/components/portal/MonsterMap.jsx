@@ -1,11 +1,15 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
   Box, Typography, Paper, Grid, MenuItem, TextField, ToggleButtonGroup,
   ToggleButton, CircularProgress, Alert, Chip, List, ListItem, ListItemButton,
   ListItemText, Checkbox, Divider, InputAdornment, FormControlLabel, Switch,
+  IconButton, Tooltip,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import { worldApi } from '../../api/endpoints.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,6 +26,9 @@ const CELL_M = 4;          // metres per cell (fixed by ingest quantisation)
 const SVG_W = 640;
 const SVG_H = 640;
 const PAD = 24;            // inner padding inside the viewport
+const MIN_VIEW = SVG_W / 12;                        // smallest viewBox width = max zoom-in (~12x)
+const FULL_VIEW = { x: 0, y: 0, w: SVG_W, h: SVG_H };
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // Blue → cyan → green → yellow → red ramp over a normalised [0,1] score.
 function heatColor(t) {
@@ -343,6 +350,80 @@ export default function MonsterMap() {
     return { nodes, minX, maxX, minZ, maxZ, scale, offX, offZ, hasBounds: !!bounds };
   }, [visibleClusters, bounds]);
 
+  // ── Pan / zoom (interactive SVG viewBox) ──────────────────────────────────
+  // Everything is drawn in a fixed SVG_W×SVG_H space; we make the viewBox stateful
+  // so the wheel zooms toward the cursor, drag pans, and reset re-fits the frame.
+  const [view, setView] = useState(FULL_VIEW);
+  const [grabbing, setGrabbing] = useState(false);
+  const svgElRef = useRef(null);
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+  const dragRef = useRef(null);
+
+  // Re-fit to the full frame whenever the map subject changes.
+  useEffect(() => { setView(FULL_VIEW); }, [serverId, zoneNo, version]);
+  const resetView = useCallback(() => setView(FULL_VIEW), []);
+
+  // Zoom by a factor (<1 = in) about a point in SVG coords (default = view centre).
+  const zoomAt = useCallback((factor, sx, sy) => {
+    const v = viewRef.current;
+    const cx = sx == null ? v.x + v.w / 2 : sx;
+    const cy = sy == null ? v.y + v.h / 2 : sy;
+    const nw = clamp(v.w * factor, MIN_VIEW, SVG_W);
+    const nh = nw; // square viewport (SVG_W === SVG_H)
+    let nx = cx - (cx - v.x) * (nw / v.w);
+    let ny = cy - (cy - v.y) * (nh / v.h);
+    nx = clamp(nx, 0, SVG_W - nw);
+    ny = clamp(ny, 0, SVG_H - nh);
+    setView({ x: nx, y: ny, w: nw, h: nh });
+  }, []);
+  const zoomBy = useCallback((factor) => zoomAt(factor, null, null), [zoomAt]);
+
+  // Native, NON-passive wheel listener (React binds onWheel passive, so
+  // preventDefault would be a no-op there and the page would scroll).
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    const el = svgElRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const v = viewRef.current;
+    const sx = v.x + ((e.clientX - rect.left) / rect.width) * v.w;
+    const sy = v.y + ((e.clientY - rect.top) / rect.height) * v.h;
+    zoomAt(e.deltaY < 0 ? 0.85 : 1 / 0.85, sx, sy);
+  }, [zoomAt]);
+  const setSvgRef = useCallback((node) => {
+    if (svgElRef.current) svgElRef.current.removeEventListener('wheel', handleWheel);
+    svgElRef.current = node;
+    if (node) node.addEventListener('wheel', handleWheel, { passive: false });
+  }, [handleWheel]);
+
+  const onPointerDown = useCallback((e) => {
+    dragRef.current = { px: e.clientX, py: e.clientY, view: viewRef.current };
+    setGrabbing(true);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }, []);
+  const onPointerMove = useCallback((e) => {
+    const d = dragRef.current;
+    const el = svgElRef.current;
+    if (!d || !el) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dx = ((e.clientX - d.px) / rect.width) * d.view.w;
+    const dy = ((e.clientY - d.py) / rect.height) * d.view.h;
+    setView({
+      w: d.view.w, h: d.view.h,
+      x: clamp(d.view.x - dx, 0, SVG_W - d.view.w),
+      y: clamp(d.view.y - dy, 0, SVG_H - d.view.h),
+    });
+  }, []);
+  const onPointerUp = useCallback((e) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setGrabbing(false);
+    e.currentTarget?.releasePointerCapture?.(e.pointerId);
+  }, []);
+
   // Background <image> rectangle in SVG space, framing the full zone extent with the
   // SAME world→SVG transform as the spawn points (so an uploaded bot-export image
   // aligns pixel-accurately). Two cases:
@@ -524,11 +605,21 @@ export default function MonsterMap() {
 
             {frame && (
               <Box sx={{ position: 'relative' }}>
+                {/* Zoom / pan controls (wheel = zoom-to-cursor, drag = pan). */}
+                <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 0.5, bgcolor: 'rgba(0,0,0,0.4)', borderRadius: 1, p: 0.25 }}>
+                  <Tooltip title="Zoom in" placement="left"><IconButton size="small" onClick={() => zoomBy(0.7)} sx={{ color: '#fff' }}><ZoomInIcon fontSize="small" /></IconButton></Tooltip>
+                  <Tooltip title="Zoom out" placement="left"><IconButton size="small" onClick={() => zoomBy(1 / 0.7)} sx={{ color: '#fff' }}><ZoomOutIcon fontSize="small" /></IconButton></Tooltip>
+                  <Tooltip title="Reset view" placement="left"><IconButton size="small" onClick={resetView} sx={{ color: '#fff' }}><RestartAltIcon fontSize="small" /></IconButton></Tooltip>
+                </Box>
                 <svg
-                  viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+                  ref={setSvgRef}
+                  viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
                   width="100%"
-                  style={{ display: 'block', background: 'rgba(255,255,255,0.02)', borderRadius: 4, aspectRatio: '1 / 1' }}
-                  onMouseLeave={() => setHover(null)}
+                  style={{ display: 'block', background: 'rgba(255,255,255,0.02)', borderRadius: 4, aspectRatio: '1 / 1', cursor: grabbing ? 'grabbing' : 'grab', touchAction: 'none' }}
+                  onPointerDown={onPointerDown}
+                  onPointerMove={onPointerMove}
+                  onPointerUp={onPointerUp}
+                  onPointerLeave={(e) => { onPointerUp(e); setHover(null); }}
                 >
                   <style>{`
                     @keyframes mmHighlightPulse {

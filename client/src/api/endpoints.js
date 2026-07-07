@@ -114,6 +114,19 @@ export const adminApi = {
     formData.append('file', file);
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/import-names`, { method: 'POST', body: formData });
   },
+
+  // Import a bot-exported zone_<N>_calib.json (map-export sidecar) to set the
+  // per-(server, zone) zone_bounds so an uploaded background renders framed
+  // (accurate) instead of the auto-fit approximation (super-admin) — additive.
+  // Multipart FormData (single field "file"), same pattern as uploadZoneMap /
+  // importServerNames (apiFetch skips the JSON Content-Type for FormData so the
+  // browser sets the multipart boundary; CSRF + credentials still apply).
+  // → { ok, zone_no }.
+  importZoneBounds: (id, zoneNo, file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/zones/${encodeURIComponent(zoneNo)}/bounds`, { method: 'POST', body: formData });
+  },
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────
