@@ -508,6 +508,45 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   res.json({ ok: true, signed_at: now });
 });
 
+// ── GET /servers/:id/offset-dev-file ─────────────────────────────────────────
+// Emit the UNSIGNED effective profile as a bot-ingestible offset_overrides.json a
+// dev machine can drop into %APPDATA%/<DATA_DIR_NAME>/ to bootstrap. Same EFFECTIVE
+// merge as the sign handler (build-template base MERGED WITH overrides, override
+// wins) but NO signing, NO password — the Debug bot reads this file directly. 404
+// if the server is missing. stamp/size may be null on a dev box (that is fine).
+router.get('/servers/:id/offset-dev-file', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  // Effective offset set = the server's build-template base MERGED WITH its
+  // overrides (override wins) — the exact merge the sign handler blob carries.
+  // BIGINT values arrive as strings from mysql2.
+  const [templateValueRows, overrideRows] = await Promise.all([
+    server.offset_template_id != null
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      : Promise.resolve([]),
+    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+  ]);
+  const fields = {};
+  for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
+  for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
+
+  res.json({
+    v: 1,
+    server_id: serverId,
+    // null only when unset (mirror the sign handler, which permits 0 and rejects
+    // only null — `Number(x) || null` would wrongly null a legitimate 0).
+    stamp: server.engine_time_date_stamp == null ? null : Number(server.engine_time_date_stamp),
+    size:  server.engine_size_of_image   == null ? null : Number(server.engine_size_of_image),
+    fields,
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Build templates (Phase 1) — named per-edition base value-sets that servers fork.
 // ─────────────────────────────────────────────────────────────────────────────

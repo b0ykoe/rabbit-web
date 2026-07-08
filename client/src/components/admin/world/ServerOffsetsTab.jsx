@@ -76,6 +76,7 @@ export default function ServerOffsetsTab({ server }) {
 
   const [saving, setSaving]       = useState(false);
   const [signOpen, setSignOpen]   = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Seed the working copies from a freshly-loaded payload.
   const seedFrom = useCallback((payload) => {
@@ -177,6 +178,32 @@ export default function ServerOffsetsTab({ server }) {
       showSnackbar(errMsg(err, 'Save failed') + suffix, 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── Download dev .json ─────────────────────────────────────────────────────
+  // Fetch the UNSIGNED effective profile and trigger a browser download of an
+  // offset_overrides.json a dev machine can drop into %APPDATA%/<DATA_DIR_NAME>/
+  // to bootstrap the Debug bot (no signing needed for the local apply-file path).
+  const handleDownloadDevFile = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const data = await adminApi.getServerOffsetDevFile(serverId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'offset_overrides.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showSnackbar('Downloaded offset_overrides.json');
+    } catch (err) {
+      showSnackbar(errMsg(err, 'Download failed'), 'error');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -339,6 +366,13 @@ export default function ServerOffsetsTab({ server }) {
                 )}
               </Stack>
               <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+                <Button
+                  variant="text"
+                  onClick={handleDownloadDevFile}
+                  disabled={downloading}
+                >
+                  {downloading ? 'Downloading…' : 'Download dev .json'}
+                </Button>
                 <Button
                   variant="outlined"
                   onClick={handleSave}

@@ -22,7 +22,9 @@
  * BLOB FORMAT (what the bot verifies in Phase E — kept dead simple, NO
  * canonicalization needed)
  *   { payload_b64, signature_b64 }
- *     payload      = utf8 bytes of JSON.stringify({ server_id, stamp, size, fields })
+ *     payload      = utf8 bytes of JSON.stringify({ v, server_id, stamp, size, fields })
+ *                    v = integer schema version (1) — forward-compat so later phases
+ *                    can add sections without a flag-day; older bots ignore it.
  *     payload_b64  = base64(payload)
  *     signature_b64= base64( Ed25519_sign(payload) )   // signed over THOSE EXACT bytes
  *   The bot base64-decodes payload_b64, verifies the signature over the raw
@@ -155,8 +157,10 @@ export async function signPayload(payloadBytes, password, encPrivateKey) {
 
 /**
  * Build the signed blob object the bot verifies.
- * payload = JSON.stringify({ server_id, stamp, size, fields }) utf8 bytes; the
- * signature is over THOSE EXACT bytes (no canonicalization anywhere).
+ * payload = JSON.stringify({ v, server_id, stamp, size, fields }) utf8 bytes; the
+ * signature is over THOSE EXACT bytes (no canonicalization anywhere). `v` is an
+ * integer schema version (1) placed FIRST for forward-compat — later phases can
+ * add sections without a flag-day, and the currently-deployed bot ignores it.
  * @param {number} serverId
  * @param {number|string} stamp - engine TimeDateStamp
  * @param {number|string} size  - engine SizeOfImage
@@ -167,6 +171,7 @@ export async function signPayload(payloadBytes, password, encPrivateKey) {
  */
 export async function buildBlob(serverId, stamp, size, fieldsObj, password, encPrivateKey) {
   const payloadObj = {
+    v: 1,
     server_id: serverId,
     stamp,
     size,
