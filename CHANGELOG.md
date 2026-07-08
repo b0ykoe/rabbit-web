@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.16.0] — Offsets → signiertes Panel (Templates, per-Build-Tier, Name-Channel, Push-Refetch)
+
+Fasst die Offset→Panel-Migration seit 0.15.0 zu einem Release zusammen: Engine.dll-Offsets
+werden im Panel gepflegt, Ed25519-signiert und pro `(Server, Engine-Stamp)` an den Bot
+ausgeliefert (kompilierter Fallback bleibt — additiv, kann nicht bricken).
+
+### Added
+
+- **Signierte Offset-Profile pro Server (P0–P4).** Admins pflegen die Offsets im Panel; ein
+  Ed25519-signierter Blob wird per `GET /servers/:id/offset-blob` ausgeliefert, gegen den
+  Engine-Fingerprint (`?stamp=&size=`) gated und vom Bot über den kompilierten Fallback
+  angewandt. `schema_version`-Envelope (`v`) für Vorwärtskompatibilität.
+- **Build-Templates + Auto-Derive.** Basis-Templates → Server-Forks → per-Server-Overrides;
+  der Import eines Bot-Offset-Katalogs leitet die Server-Overrides automatisch ab. Per-Template
+  Wert-Editor.
+- **Per-Build-Tier (per Engine-Stamp, P4).** `server_builds` mit eigenem signierten Blob;
+  Präzedenz **build > server-general > template**, als Snapshot beim Signieren eingefaltet.
+- **Name-Channel (P5).** Der signierte Payload trägt optional die mangled Engine.dll-Export-
+  **Namen** (Strings); `base_text`/`value_text` auf Katalog/Template/Server/Build.
+- **Heartbeat Push-Refetch.** Die `POST /auth/heartbeat`-Response echot jetzt
+  `offsets_updated_at` — den `signed_at`-Timestamp **genau des Blobs, den der Bot laden würde**
+  (spiegelt die `/offset-blob`-Tier-Auswahl inkl. parseBlob exakt). Der Bot advertised dafür
+  optional `offsets_server_id` / `engine_stamp` / `engine_size` im Body und refetcht bei
+  Änderung sofort (≤10 s) statt auf den blinden 10-Min-Poll zu warten. Additiv — alte Bots und
+  Bots ohne signiertes Profil bleiben unberührt. Keine Migration (Reuse von `signed_at`).
+
 ## [0.15.0] — Feature-Flag-Parität mit Bot DLL + Race-Fix
 
 ### Added

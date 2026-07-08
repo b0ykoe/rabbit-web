@@ -144,6 +144,15 @@ export const botHeartbeatSchema = z.object({
     sockets_active: z.number().int().nonnegative().default(0),
     sockets_total:  z.number().int().nonnegative().default(0),
   })).optional(),
+  // Offset push-refetch selector (change-driven offset sync). The bot advertises
+  // which (server, Engine build) it needs offsets for, so the heartbeat response
+  // can echo that exact blob's last-signed timestamp (offsets_updated_at) and the
+  // bot refetches immediately when an admin re-signs — instead of a blind poll.
+  // All optional — only sent once a server is resolved AND the spawn_tracking-gated
+  // offset sync is active. stamp/size are the Engine.dll PE fingerprint (uint32).
+  offsets_server_id: z.number().int().nonnegative().optional(),
+  engine_stamp:      z.number().int().nonnegative().optional(),
+  engine_size:       z.number().int().nonnegative().optional(),
 });
 
 // ── Bot: Monster-map ingest (world) ──────────────────────────────────────────

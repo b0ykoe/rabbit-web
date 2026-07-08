@@ -267,7 +267,8 @@ router.post('/heartbeat',
   validateBotToken,
   botHeartbeatSessionLimiter,
   async (req, res) => {
-  const { session_id, stats, server_ip, server_port, server_variant, proxy_stats } = req.validated;
+  const { session_id, stats, server_ip, server_port, server_variant, proxy_stats,
+          offsets_server_id, engine_stamp } = req.validated;
   const tp = req.botToken;
 
   if (tp.session_id !== session_id) {
@@ -350,6 +351,45 @@ router.post('/heartbeat',
       ver:        1,
     };
     result.token = await signToken(newPayload, config.bot.ed25519PrivateKey);
+  }
+
+  // ── Offset push-refetch signal ───────────────────────────────────────────────
+  // Echo the last-signed timestamp of the EXACT blob this bot would fetch, so it
+  // can refetch immediately when an admin re-signs offsets — instead of waiting on
+  // its blind ~10-min poll. The selection MUST mirror GET /servers/:id/offset-blob
+  // precisely: a signed per-build row for (server_id, engine_stamp) wins; otherwise
+  // the server-level blob. Only emitted when the bot advertised its offset context
+  // AND a signed blob actually exists (absent → the bot just keeps its poll).
+  if (Number.isFinite(offsets_server_id) && offsets_server_id > 0) {
+    // Mirror GET /servers/:id/offset-blob's parseBlob EXACTLY: a stored blob that
+    // doesn't parse is treated as absent there (falls through to server-level), so
+    // we must not advertise a tier the bot won't actually download.
+    const parses = (text) => {
+      if (text == null) return false;
+      try { JSON.parse(text); return true; } catch { return false; }
+    };
+    let signedAt = null;
+    let matchedBuild = false;
+    if (Number.isFinite(engine_stamp) && engine_stamp > 0) {
+      const build = await db('server_builds')
+        .where({ server_id: offsets_server_id, stamp: engine_stamp })
+        .select('signed_at', 'signed_blob')
+        .first();
+      if (build && parses(build.signed_blob)) {
+        matchedBuild = true;                 // per-build blob is what the bot gets
+        signedAt = build.signed_at ?? null;
+      }
+    }
+    if (!matchedBuild) {
+      const gs = await db('game_servers')
+        .where('id', offsets_server_id)
+        .select('offset_signed_at', 'offset_signed_blob')
+        .first();
+      if (gs && parses(gs.offset_signed_blob)) signedAt = gs.offset_signed_at ?? null;
+    }
+    // Coerce: guards against a ≥14-digit BIGINT arriving from mysql2 as a string
+    // (epoch seconds are 10 digits today, so this is defensive, not load-bearing).
+    if (signedAt != null) result.offsets_updated_at = Number(signedAt);
   }
 
   res.json(result);
