@@ -540,20 +540,13 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   const stamp = Number(server.engine_time_date_stamp);
   const size  = Number(server.engine_size_of_image);
 
-  // The blob carries the FULL EFFECTIVE offset set = the server's build-template
-  // base MERGED WITH its overrides (override wins). This makes the panel
-  // authoritative: the bot applies every field it's given (fields the panel doesn't
-  // manage — no template value, no override — are simply absent and keep the bot's
-  // compiled value). BIGINT values arrive as strings from mysql2.
-  const [templateValueRows, overrideRows] = await Promise.all([
-    server.offset_template_id != null
-      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).whereNull('value_text').select('field_name', 'value')
-      : Promise.resolve([]),
-    db('server_offset_overrides').where('server_id', serverId).whereNull('value_text').select('field_name', 'value'),
-  ]);
-  const fields = {};
-  for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
-  for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
+  // The server-level BASE blob carries the effective DATA offsets = template base
+  // MERGED WITH overrides (override wins), with kind='va' STRIPPED (baseEffectiveFields)
+  // — because this blob is IDENTITY-gated on the bot and must not carry per-build VAs.
+  // Names are safe (GetProcAddress by string is build-independent + fail-safe), so
+  // they ride along. Fields the panel doesn't manage are absent → the bot keeps its
+  // compiled value.
+  const fields = await baseEffectiveFields(server, serverId);
   const fieldCount = Object.keys(fields).length;
 
   // STRING dimension (P5): the effective mangled export names for this server
@@ -562,7 +555,8 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
 
   let blob;
   try {
-    blob = await buildBlob(serverId, stamp, size, fields, names, password, keyRow.enc_private_key);
+    // isBase=true → the bot applies this on server identity, not the exact fingerprint.
+    blob = await buildBlob(serverId, stamp, size, fields, names, password, keyRow.enc_private_key, null, true);
   } catch (err) {
     if (err instanceof OffsetKeyAuthError) {
       return res.status(403).json({ error: 'wrong signing password' });
@@ -796,6 +790,19 @@ async function generalEffectiveFields(server, serverId) {
   const fields = {};
   for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
   for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
+  return fields;
+}
+
+// The SERVER-LEVEL "base" effective set = generalEffectiveFields with every
+// kind='va' field REMOVED. The base blob is applied IDENTITY-gated on the bot (not
+// fingerprint-gated), so it must carry ONLY layout-stable DATA offsets — absolute
+// VAs shift per Engine build and belong exclusively to the exact-stamp per-build
+// blobs (signOneBuild keeps them; this strips them). Per-build signing uses
+// generalEffectiveFields directly (VAs intact) — only the server-level base uses this.
+async function baseEffectiveFields(server, serverId) {
+  const fields = await generalEffectiveFields(server, serverId);
+  const vaNames = await db('offset_field_catalog').where('kind', 'va').pluck('field_name');
+  for (const k of vaNames) delete fields[k];
   return fields;
 }
 
@@ -1109,8 +1116,9 @@ async function signOneBuild(server, serverId, build, password, encPrivateKey) {
   const stamp = Number(build.stamp);
   const size  = Number(build.size);
   // Carry the build's human label into the signed payload so the bot can display
-  // which build/profile is applied (display-only; per-build blobs only).
-  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey, build.label);
+  // which build/profile is applied (display-only; per-build blobs only). isBase=false:
+  // a per-build blob keeps its VAs and stays EXACT-STAMP gated on the bot (unchanged).
+  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey, build.label, false);
 
   const now = nowSec();
   await db('server_builds').where('id', build.id).update({
@@ -1195,11 +1203,11 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
     // Server-level blob (only when a fingerprint is set) — same merge + crypto as
     // POST /servers/:id/offsets/sign.
     if (hasServerFingerprint) {
-      const fields = await generalEffectiveFields(server, serverId);
+      const fields = await baseEffectiveFields(server, serverId);   // DATA only (VAs stripped)
       const names  = await effectiveNames(serverId);   // server-level string dimension (P5)
       const blob = await buildBlob(
         serverId, Number(server.engine_time_date_stamp), Number(server.engine_size_of_image),
-        fields, names, password, keyRow.enc_private_key,
+        fields, names, password, keyRow.enc_private_key, null, true,   // isBase=true (identity-gated)
       );
       await db('game_servers').where('id', serverId).update({
         offset_signed_blob: JSON.stringify(blob), offset_signed_at: now,

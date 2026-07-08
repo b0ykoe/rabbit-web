@@ -177,7 +177,7 @@ export async function signPayload(payloadBytes, password, encPrivateKey) {
  * @param {string} encPrivateKey
  * @returns {Promise<{ payload_b64: string, signature_b64: string }>}
  */
-export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, password, encPrivateKey, label) {
+export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, password, encPrivateKey, label, isBase) {
   const payloadObj = {
     v: 1,
     server_id: serverId,
@@ -190,6 +190,11 @@ export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, pass
   // bot treats it as DISPLAY-ONLY. Omitted when empty so label-less blobs keep
   // their exact prior byte shape (and signature).
   if (typeof label === 'string' && label.length > 0) payloadObj.label = label;
+  // IDENTITY-gated BASE marker. When true the bot applies this blob on SERVER
+  // IDENTITY (not the exact Engine fingerprint) — so it MUST carry only layout-
+  // stable DATA offsets (the caller strips kind='va'). Only server-level base blobs
+  // set it; per-build blobs omit it (the bot defaults absent → exact-stamp gated).
+  if (isBase) payloadObj.base = true;
   const payloadBytes = Buffer.from(JSON.stringify(payloadObj), 'utf8');
   const sig = await signPayload(payloadBytes, password, encPrivateKey);
   return {

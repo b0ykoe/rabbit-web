@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.16.2] — Identitäts-gegatete Server-Base (VAs ausgeschlossen)
+
+### Changed
+
+- **Server-level Base-Blob ist jetzt identitäts-gegatet.** `buildBlob` markiert den server-level
+  Blob mit `base:true` im signierten Payload; der Bot wendet ihn auf **Server-Identität** an (nicht
+  den exakten Fingerprint), sodass ein Bot nach einem Client-Patch die layout-stabilen DATEN-Offsets
+  weiterhin bekommt, statt den ganzen Blob zu verwerfen. Behebt den „toten Fallback" bei
+  Fingerprint-Drift.
+- **VAs aus der Base ausgeschlossen.** Neuer `baseEffectiveFields` = general-effektives Set minus
+  `kind='va'`; server-level Sign (Einzel-Sign + Sign-all) nutzt ihn. Per-Build-Blobs (`signOneBuild`)
+  bleiben **unverändert** (VAs intakt, exakt-Stamp-gated) — nur die Base verliert die VAs, weil eine
+  absolute Adresse per Identität nicht korrekt served werden kann.
+
+### Hinweis
+
+- Bestehende server-level Blobs bleiben fingerprint-gated, **bis sie neu signiert werden** — das
+  Identity-Verhalten aktiviert sich erst beim nächsten Sign (fail-safe Richtung).
+
 ## [0.16.1] — Per-Build-Label im signierten Offset-Blob
 
 ### Added
