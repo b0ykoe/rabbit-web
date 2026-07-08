@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.16.3] — Offsets-Seite: UX an die identitäts-gegatete Base angepasst
+
+### Changed
+
+- **Fingerprint-Sektion umbenannt/entschärft.** Auf der Server-Offsets-Seite heißt „Engine
+  fingerprint" jetzt „**Engine fingerprint (reference build — optional)**"; der Hilfetext sagt
+  nicht mehr „der Blob gilt nur für einen Bot mit passender Engine.dll" (das war nach der
+  identitäts-gegateten Base falsch), sondern erklärt, dass die Base per **Server-Identität** für
+  **jeden** Build gilt und der exakte Fingerprint-Gate auf den **Per-Build**-Overrides lebt.
+- **VA-Hinweis** über der Override-Tabelle: **DATA**-Felder bilden die identitäts-gegatete Base,
+  **VA**-Felder sind daraus ausgeschlossen und erreichen einen Bot nur über ein Per-Build-Blob.
+- **Fingerprint fürs Base-Signieren optional.** Der 400-Check „set the engine fingerprint before
+  signing" ist entfernt (Leftover) — die identitäts-gegatete Base braucht ihn nicht; default 0.
+  Sign-all signiert die server-level Base jetzt immer (nicht mehr nur bei gesetztem Fingerprint).
+
 ## [0.16.2] — Identitäts-gegatete Server-Base (VAs ausgeschlossen)
 
 ### Changed

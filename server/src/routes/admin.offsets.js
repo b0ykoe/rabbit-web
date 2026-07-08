@@ -532,13 +532,12 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
     return res.status(409).json({ error: 'generate a signing key first' });
   }
 
-  // The fingerprint is REQUIRED to sign — the blob is keyed to a specific
-  // Engine.dll build so a bot never applies it to the wrong binary.
-  if (server.engine_time_date_stamp == null || server.engine_size_of_image == null) {
-    return res.status(400).json({ error: 'set the engine fingerprint (stamp/size) before signing' });
-  }
-  const stamp = Number(server.engine_time_date_stamp);
-  const size  = Number(server.engine_size_of_image);
+  // The server base is IDENTITY-gated (the bot applies it for ANY build of this
+  // server), so the fingerprint is OPTIONAL — it's only the reference build stamped
+  // into the payload for the bot's diagnostics. Default 0 when unset; the bot ignores
+  // stamp/size for a base blob. (Per-build blobs keep their exact-stamp gate.)
+  const stamp = server.engine_time_date_stamp == null ? 0 : Number(server.engine_time_date_stamp);
+  const size  = server.engine_size_of_image  == null ? 0 : Number(server.engine_size_of_image);
 
   // The server-level BASE blob carries the effective DATA offsets = template base
   // MERGED WITH overrides (override wins), with kind='va' STRIPPED (baseEffectiveFields)
@@ -1185,13 +1184,6 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
   const builds = await db('server_builds').where('server_id', serverId)
     .select('id', 'stamp', 'size', 'label');   // label → signed payload (display-only)
 
-  // Whether the server-level blob (038) can also be re-signed: only when the
-  // server carries a fingerprint (stamp/size). The server-level effective set is
-  // the GENERAL merge (template base + general overrides), keyed to the server's
-  // own fingerprint — exactly what POST /servers/:id/offsets/sign produces.
-  const hasServerFingerprint =
-    server.engine_time_date_stamp != null && server.engine_size_of_image != null;
-
   let signed = 0;
   const now = nowSec();
   try {
@@ -1200,13 +1192,16 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
       await signOneBuild(server, serverId, build, password, keyRow.enc_private_key);
       signed += 1;
     }
-    // Server-level blob (only when a fingerprint is set) — same merge + crypto as
+    // Server-level BASE blob — identity-gated, so ALWAYS (re)signed; the fingerprint
+    // is optional (reference build only, default 0). Same merge + crypto as
     // POST /servers/:id/offsets/sign.
-    if (hasServerFingerprint) {
+    {
       const fields = await baseEffectiveFields(server, serverId);   // DATA only (VAs stripped)
       const names  = await effectiveNames(serverId);   // server-level string dimension (P5)
+      const sStamp = server.engine_time_date_stamp == null ? 0 : Number(server.engine_time_date_stamp);
+      const sSize  = server.engine_size_of_image  == null ? 0 : Number(server.engine_size_of_image);
       const blob = await buildBlob(
-        serverId, Number(server.engine_time_date_stamp), Number(server.engine_size_of_image),
+        serverId, sStamp, sSize,
         fields, names, password, keyRow.enc_private_key, null, true,   // isBase=true (identity-gated)
       );
       await db('game_servers').where('id', serverId).update({
@@ -1223,7 +1218,7 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
 
   await recordAudit(db, req, {
     action: 'world.build.sign_all', subjectType: 'game_server', subjectId: String(serverId),
-    newValues: { signed, builds: builds.length, server_blob: hasServerFingerprint },
+    newValues: { signed, builds: builds.length, server_blob: true },
   });
   res.json({ ok: true, signed });
 });

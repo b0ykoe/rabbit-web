@@ -302,10 +302,11 @@ export default function ServerOffsetsTab({ server }) {
             </TextField>
           </Section>
 
-          {/* (b) Engine fingerprint. */}
+          {/* (b) Engine fingerprint — now just the REFERENCE build for the identity-gated
+              base (the exact-match gate lives on per-build overrides below). */}
           <Section
-            title="Engine fingerprint"
-            caption="The signed blob only applies to a bot whose Engine.dll matches this fingerprint. Export it from the bot's Dev > Exporter tab."
+            title="Engine fingerprint (reference build — optional)"
+            caption="The server base applies to a bot by SERVER IDENTITY — for ANY Engine.dll build of this server, no exact match required. This fingerprint is only the reference build the base is stamped against (shown in the bot's diagnostics); it's optional. The EXACT fingerprint gate lives on the per-build overrides below (one build = one Engine.dll stamp). Export a build's stamp from the bot's Dev > Exporter tab."
           >
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField
@@ -343,6 +344,12 @@ export default function ServerOffsetsTab({ server }) {
 
           {/* (c) Base-vs-override field editor. */}
           <Section title="Offset overrides">
+            <Alert severity="info" variant="outlined" sx={{ mb: 2, py: 0.5 }}>
+              <strong>DATA</strong> fields form the identity-gated server base (applied to any
+              build). <strong>VA</strong> (call-target) fields are <strong>excluded from the base</strong>{' '}
+              — an absolute address can't be served by identity — so they reach a bot only through a{' '}
+              <strong>per-build</strong> blob below. Setting a VA override here seeds that per-build layer.
+            </Alert>
             <OffsetFieldTable
               catalog={catalog}
               effective={effective}
