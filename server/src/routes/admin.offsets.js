@@ -255,11 +255,19 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
           if (av == null || av === r.base_value) continue;   // no delta
           overrideRows.push({ server_id: targetServerId, field_name: r.field_name, value: av, updated_at: now });
         }
-        await trx('game_servers').where('id', targetServerId).update({
+        // Also stamp the server's Engine.dll FINGERPRINT from the export (the bot
+        // records the stamp/size of the binary it read), so the admin doesn't have
+        // to type it by hand before signing.
+        const srvPatch = {
           offset_template_id: templateId,
           offset_signed_blob: null,
           offset_signed_at:   null,
-        });
+        };
+        const impStamp = Number(parsed?.stamp);
+        const impSize  = Number(parsed?.size);
+        if (Number.isInteger(impStamp) && impStamp >= 0) srvPatch.engine_time_date_stamp = impStamp;
+        if (Number.isInteger(impSize)  && impSize  >= 0) srvPatch.engine_size_of_image   = impSize;
+        await trx('game_servers').where('id', targetServerId).update(srvPatch);
         await trx('server_offset_overrides').where('server_id', targetServerId).del();
         if (overrideRows.length) await trx('server_offset_overrides').insert(overrideRows);
         overrideCount   = overrideRows.length;
