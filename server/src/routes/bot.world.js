@@ -214,12 +214,18 @@ router.get('/servers',
   });
 
 // ── GET /servers/:id/offset-blob ─────────────────────────────────────────────
-// Bot-facing serve of a server's SIGNED offset blob (Phase D/E). Auth = the SAME
-// ingest middleware as /spawns (validateSpawnIngest → spawn_tracking gate; token
-// via Authorization: Bearer since a GET carries no body). The blob's ed25519
+// Bot-facing serve of a server's SIGNED offset blob (Phase D/E + P4). Auth = the
+// SAME ingest middleware as /spawns (validateSpawnIngest → spawn_tracking gate;
+// token via Authorization: Bearer since a GET carries no body). The blob's ed25519
 // signature — verified by the bot with its COMPILED pubkey — is the tamper gate,
 // so the stored blob is safe to serve to any authed bot verbatim. 404 when the
 // server has no signed blob yet (unsigned).
+//
+// P4 (per-patch tier): a bot may pass ?stamp=<engine TimeDateStamp> (and optional
+// ?size=). When a server_builds row matches (server_id, stamp) AND carries a
+// signed_blob, THAT per-build blob is served; else we fall back to the server-level
+// game_servers.offset_signed_blob (038) — so an OLD bot that sends no stamp, or a
+// stamp with no matching signed build, gets the server-level blob exactly as before.
 //
 //   200 → the parsed { payload_b64, signature_b64 } object.
 //   404 → { error: 'no signed offsets' }  (server missing OR blob unsigned).
@@ -234,6 +240,35 @@ router.get('/servers/:id/offset-blob',
       return res.status(400).json({ error: 'Bad server id' });
     }
 
+    // Optional per-build selector. A malformed/absent stamp simply skips the
+    // per-build lookup and falls back to the server-level blob (back-compat).
+    const stampRaw = typeof req.query.stamp === 'string' ? req.query.stamp.trim() : '';
+    const stamp = /^\d+$/.test(stampRaw) ? Number(stampRaw) : null;
+
+    // Stored as JSON.stringify({payload_b64,signature_b64}); parse it back so the
+    // bot receives the object directly. A malformed stored blob (shouldn't happen
+    // — it was written by buildBlob) is treated as unsigned/absent.
+    const parseBlob = (text) => {
+      if (text == null) return null;
+      try { return JSON.parse(text); } catch { return null; }
+    };
+
+    // 1) Per-build blob for THIS stamp, when the bot sent one and a matching signed
+    //    build exists. size is accepted but not used to key (stamp is the identity;
+    //    the blob's payload already carries the build's size).
+    if (stamp != null) {
+      const build = await db('server_builds')
+        .where({ server_id: serverId, stamp })
+        .select('signed_blob')
+        .first();
+      if (build && build.signed_blob != null) {
+        const blob = parseBlob(build.signed_blob);
+        if (blob) return res.json(blob);
+      }
+    }
+
+    // 2) Fall back to the server-level blob (unchanged behavior when no stamp / no
+    //    matching signed build).
     const server = await db('game_servers')
       .where('id', serverId)
       .select('offset_signed_blob')
@@ -241,13 +276,8 @@ router.get('/servers/:id/offset-blob',
     if (!server || server.offset_signed_blob == null) {
       return res.status(404).json({ error: 'no signed offsets' });
     }
-
-    // Stored as JSON.stringify({payload_b64,signature_b64}); parse it back so the
-    // bot receives the object directly. A malformed stored blob (shouldn't happen
-    // — it was written by buildBlob) is treated as unsigned.
-    let blob;
-    try { blob = JSON.parse(server.offset_signed_blob); }
-    catch { return res.status(404).json({ error: 'no signed offsets' }); }
+    const blob = parseBlob(server.offset_signed_blob);
+    if (!blob) return res.status(404).json({ error: 'no signed offsets' });
 
     res.json(blob);
   });

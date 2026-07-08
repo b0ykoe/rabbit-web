@@ -602,6 +602,10 @@ router.delete('/servers/:id', requireSuperAdmin, async (req, res) => {
     c.scan_sessions           = await trx('scan_sessions').where('server_id', id).del();
     // 038: per-server offset overrides (the fingerprint/blob columns live on game_servers).
     c.server_offset_overrides = await trx('server_offset_overrides').where('server_id', id).del();
+    // 040: per-build overrides (keyed by server_build_id) then the builds themselves.
+    c.server_build_overrides  = await trx('server_build_overrides')
+      .whereIn('server_build_id', trx('server_builds').where('server_id', id).select('id')).del();
+    c.server_builds           = await trx('server_builds').where('server_id', id).del();
     c.game_servers            = await trx('game_servers').where('id', id).del();
     return c;
   });
@@ -850,10 +854,14 @@ router.post('/servers/:id/merge', requireSuperAdmin, validate(serverMergeSchema)
     // scan_sessions — plain re-point of the informational snapshot rows.
     await trx.raw(`UPDATE scan_sessions SET server_id = ? WHERE server_id = ?`, [targetId, sourceId]);
 
-    // 038: offset overrides are build-specific to the SOURCE; the target keeps its own,
-    // so DROP the source's rather than re-point (its fingerprint/blob columns vanish with
-    // the source game_servers row deleted below).
+    // 038/040: offset overrides + per-build overrides/blobs are build-specific to the
+    // SOURCE; the target keeps its own, so DROP the source's rather than re-point (its
+    // fingerprint/blob columns vanish with the source game_servers row deleted below).
     await trx.raw(`DELETE FROM server_offset_overrides WHERE server_id = ?`, [sourceId]);
+    await trx.raw(`DELETE sbo FROM server_build_overrides sbo
+                   JOIN server_builds sb ON sb.id = sbo.server_build_id
+                   WHERE sb.server_id = ?`, [sourceId]);
+    await trx.raw(`DELETE FROM server_builds WHERE server_id = ?`, [sourceId]);
 
     // Finally, delete the drained source server row.
     await trx.raw(`DELETE FROM game_servers WHERE id = ?`, [sourceId]);

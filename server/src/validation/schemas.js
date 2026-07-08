@@ -403,6 +403,48 @@ export const templateValuesPutSchema = z.object({
   })).max(2000),
 });
 
+// ── Admin: Per-server builds (world, 040 — Phase P4, per-patch tier) ──────────
+// A server BUILD = a (server, Engine.dll stamp) row carrying a PER-BUILD override
+// layer over the general (038) layer + its own signed blob. Effective value =
+// per-build override ?? general override ?? template base. See admin.offsets.js.
+//
+// POST /servers/:id/builds — create a build for a stamp (409 on dup server+stamp).
+// stamp/size are PE fingerprints (nonnegative ints); label is an optional label.
+export const buildCreateSchema = z.object({
+  stamp: z.coerce.number().int().nonnegative(),
+  size:  z.coerce.number().int().nonnegative(),
+  label: z.string().max(64).optional(),
+});
+
+// PATCH /servers/:id/builds/:bid — edit the label only (null clears it).
+export const buildUpdateSchema = z.object({
+  label: z.string().max(64).nullable().optional(),
+}).refine(() => true);
+
+// PUT /servers/:id/builds/:bid/offsets — REPLACE-ALL this build's overrides.
+// Each field_name is validated against offset_field_catalog in the route; values
+// are plain integers (an offset can be negative). Capped at 600 like the general
+// PUT (the whole GameLayout is well under that).
+export const buildOverridesPutSchema = z.object({
+  overrides: z.array(z.object({
+    field_name: z.string().min(1).max(64),
+    value:      z.coerce.number().int(),
+  })).max(600),
+});
+
+// POST /servers/:id/builds/:bid/sign — sign this build's blob. password required
+// (min 1); a WRONG password fails cleanly (403) via the crypto module's typed
+// auth error.
+export const buildSignSchema = z.object({
+  password: z.string().min(1),
+});
+
+// POST /servers/:id/builds/sign-all — re-sign EVERY build of the server (+ the
+// server-level blob) with ONE password. Same shape as buildSignSchema.
+export const buildsSignAllSchema = z.object({
+  password: z.string().min(1),
+});
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export function validate(schema) {

@@ -172,6 +172,23 @@ export const adminApi = {
   updateOffsetTemplate:    (id, body)  => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   deleteOffsetTemplate:    (id)        => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   putOffsetTemplateValues: (id, values) => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}/values`, { method: 'PUT', body: JSON.stringify({ values }) }),
+
+  // Per-build overrides (P4) — the PER-PATCH tier. Each build is one Engine.dll
+  // stamp for a server; its overrides are the deltas that shift per game patch and
+  // layer ABOVE the server's general overrides (effective = per-build > general >
+  // template). Each build carries its OWN signed blob keyed to its stamp/size, so a
+  // bot fetches the blob matching its Engine.dll. getServerBuilds lists a server's
+  // builds; get/putServerBuildOffsets read+write one build's per-build overrides
+  // (same shape as getServerOffsets minus fingerprint/templates); signServerBuild
+  // (password-gated) signs one build; signAllServerBuilds re-signs them all.
+  getServerBuilds:        (id)          => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds`),
+  createServerBuild:      (id, body)    => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds`, { method: 'POST', body: JSON.stringify(body) }),
+  updateServerBuild:      (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteServerBuild:      (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}`, { method: 'DELETE' }),
+  getServerBuildOffsets:  (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`),
+  putServerBuildOffsets:  (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
+  signServerBuild:        (id, bid, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
+  signAllServerBuilds:    (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/sign-all`, { method: 'POST', body: JSON.stringify({ password }) }),
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────

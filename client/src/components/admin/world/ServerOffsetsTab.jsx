@@ -7,6 +7,7 @@ import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import OffsetFieldTable, { parseIntFlexible, hasInvalidOverride } from './OffsetFieldTable.jsx';
 import SignOffsetsDialog from './SignOffsetsDialog.jsx';
+import BuildsSection from './BuildsSection.jsx';
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
@@ -399,6 +400,16 @@ export default function ServerOffsetsTab({ server }) {
               </Alert>
             )}
           </Paper>
+
+          {/* (e) Per-build (per-patch) overrides. The overrides above are the server's
+              GENERAL layer; per-build overrides are the deltas that shift per game patch
+              (one build = one Engine.dll stamp). effective = per-build > general > template. */}
+          <Typography variant="caption" color="text.secondary" sx={{ px: 0.5, mt: 0.5 }}>
+            The overrides above apply to <strong>every</strong> build of this server. Per-build
+            overrides below are the deltas that shift per game patch — each build (Engine.dll stamp)
+            gets its own signed blob.
+          </Typography>
+          <BuildsSection serverId={serverId} serverName={server?.name} />
         </>
       )}
 

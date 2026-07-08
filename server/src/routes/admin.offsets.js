@@ -33,7 +33,9 @@ import { config } from '../config.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
 import { validate, offsetKeyGenSchema, offsetsPutSchema, offsetSignSchema,
-         templateCreateSchema, templateUpdateSchema, templateValuesPutSchema } from '../validation/schemas.js';
+         templateCreateSchema, templateUpdateSchema, templateValuesPutSchema,
+         buildCreateSchema, buildUpdateSchema, buildOverridesPutSchema,
+         buildSignSchema, buildsSignAllSchema } from '../validation/schemas.js';
 import { generateKeypair, buildBlob, OffsetKeyAuthError } from '../crypto/offsetSigning.js';
 
 const router = Router();
@@ -693,6 +695,389 @@ router.put('/offset-templates/:id/values', requireSuperAdmin, validate(templateV
     newValues: { count: values.length },
   });
   res.json({ ok: true, count: values.length });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-server builds (Phase P4) — a PER-BUILD (per Engine.dll stamp) override layer
+// + per-build signed blobs, keyed PER-SERVER + stamp. Mirrors the bot's
+// engine_variant_nemesis.cpp: general constructor (server_offset_overrides) + a
+// per-stamp ApplyBuildSpecificOverrides switch (server_build_overrides). Effective
+// value for a bot on (server, stamp) = per_build ?? general ?? template base.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Read the GENERAL effective set for a server = template base MERGED WITH the
+// server's overrides (override wins). This is the EXACT template+general merge the
+// sign handler / GET /servers/:id/offsets use — reused so a build's `effective`
+// shows the inherited value as base and its per-build value as the override.
+// BIGINT values arrive as strings from mysql2 → Number. Returns { [field]: int }.
+async function generalEffectiveFields(server, serverId) {
+  const [templateValueRows, overrideRows] = await Promise.all([
+    server.offset_template_id != null
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      : Promise.resolve([]),
+    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+  ]);
+  const fields = {};
+  for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
+  for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
+  return fields;
+}
+
+// ── GET /servers/:id/builds ──────────────────────────────────────────────────
+// List a server's builds with a per-build override count + signed status. 404 if
+// the server is missing.
+router.get('/servers/:id/builds', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+  const server = await db('game_servers').where('id', serverId).select('id').first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const builds = await db('server_builds')
+    .where('server_id', serverId)
+    .select('id', 'stamp', 'size', 'label', 'signed_blob', 'signed_at')
+    .orderBy('stamp', 'asc');
+
+  const counts = builds.length
+    ? await db('server_build_overrides')
+        .whereIn('server_build_id', builds.map(b => b.id))
+        .select('server_build_id').count({ c: '*' }).groupBy('server_build_id')
+    : [];
+  const cc = new Map(counts.map(r => [Number(r.server_build_id), Number(r.c)]));
+  const num = (v) => (v == null ? null : Number(v));
+
+  res.json(builds.map(b => ({
+    id:             Number(b.id),
+    stamp:          num(b.stamp),
+    size:           num(b.size),
+    label:          b.label,
+    override_count: cc.get(Number(b.id)) || 0,
+    signed:         !!b.signed_blob,
+    signed_at:      num(b.signed_at),
+  })));
+});
+
+// ── POST /servers/:id/builds ─────────────────────────────────────────────────
+// Create a build (server, stamp). 409 on a duplicate (server_id, stamp).
+router.post('/servers/:id/builds', requireSuperAdmin, validate(buildCreateSchema), async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+  const server = await db('game_servers').where('id', serverId).select('id').first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const { stamp, size, label } = req.validated;
+
+  const dup = await db('server_builds').where({ server_id: serverId, stamp }).select('id').first();
+  if (dup) return res.status(409).json({ error: 'A build with that stamp already exists' });
+
+  const now = nowSec();
+  const [id] = await db('server_builds').insert({
+    server_id: serverId, stamp, size, label: label ?? null,
+    signed_blob: null, signed_at: null, created_at: now, updated_at: now,
+  });
+
+  await recordAudit(db, req, {
+    action: 'world.build.create', subjectType: 'server_build', subjectId: String(id),
+    newValues: { server_id: serverId, stamp, size, label: label ?? null },
+  });
+
+  res.status(201).json({ id: Number(id), stamp, size, label: label ?? null });
+});
+
+// ── PATCH /servers/:id/builds/:bid ───────────────────────────────────────────
+// Edit the build's label (null clears it).
+router.patch('/servers/:id/builds/:bid', requireSuperAdmin, validate(buildUpdateSchema), async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  const { label } = req.validated;
+  const patch = { updated_at: nowSec() };
+  if (label !== undefined) patch.label = label;
+  await db('server_builds').where('id', buildId).update(patch);
+
+  await recordAudit(db, req, {
+    action: 'world.build.update', subjectType: 'server_build', subjectId: String(buildId),
+    newValues: { label: label !== undefined ? label : build.label },
+  });
+  res.json({ ok: true });
+});
+
+// ── DELETE /servers/:id/builds/:bid ──────────────────────────────────────────
+// Remove a build + its per-build overrides.
+router.delete('/servers/:id/builds/:bid', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).select('id', 'stamp').first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  await db.transaction(async (trx) => {
+    await trx('server_build_overrides').where('server_build_id', buildId).del();
+    await trx('server_builds').where('id', buildId).del();
+  });
+
+  await recordAudit(db, req, {
+    action: 'world.build.delete', subjectType: 'server_build', subjectId: String(buildId),
+    oldValues: { server_id: serverId, stamp: Number(build.stamp) },
+  });
+  res.json({ ok: true });
+});
+
+// ── GET /servers/:id/builds/:bid/offsets ─────────────────────────────────────
+// The per-build offset editor view: the build's stamp/size/label, the full
+// catalog, this build's per-build overrides, and an EFFECTIVE join where the BASE
+// = the GENERAL effective (template base MERGED WITH the server's general
+// overrides — the inherited value) and the OVERRIDE = this build's per-build value.
+// 404 if the server or build is missing.
+router.get('/servers/:id/builds/:bid/offsets', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  const [catalogRows, buildOverrideRows, general] = await Promise.all([
+    db('offset_field_catalog')
+      .select('field_name', 'kind', 'criticality', 'base_value')
+      .orderBy('field_name', 'asc'),
+    db('server_build_overrides').where('server_build_id', buildId).select('field_name', 'value'),
+    generalEffectiveFields(server, serverId),
+  ]);
+
+  const num = (v) => (v == null ? null : Number(v));
+  const buildByName = new Map(buildOverrideRows.map(r => [r.field_name, num(r.value)]));
+
+  // BASE for a field = the GENERAL effective value (template base ± server general
+  // override — the inherited value this build sits on top of), else the catalog's
+  // compiled fallback. OVERRIDE = the per-build value, else null.
+  const catalog = catalogRows.map(r => {
+    const base = Object.prototype.hasOwnProperty.call(general, r.field_name)
+      ? general[r.field_name] : num(r.base_value);
+    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base };
+  });
+  const overrides = catalog
+    .filter(c => buildByName.has(c.field_name))
+    .map(c => ({ field_name: c.field_name, value: buildByName.get(c.field_name) }));
+  const effective = catalog.map(c => ({
+    field_name: c.field_name,
+    base_value: c.base_value,
+    override:   buildByName.has(c.field_name) ? buildByName.get(c.field_name) : null,
+  }));
+
+  res.json({
+    stamp:     num(build.stamp),
+    size:      num(build.size),
+    label:     build.label,
+    catalog,
+    overrides,
+    effective,
+    signed:    !!build.signed_blob,
+    signed_at: num(build.signed_at),
+  });
+});
+
+// ── PUT /servers/:id/builds/:bid/offsets ─────────────────────────────────────
+// REPLACE this build's per-build overrides. EVERY field_name must exist in
+// offset_field_catalog (400 else). Editing the content INVALIDATES this build's
+// signed blob (cleared) — it must be re-signed. Responds { ok, count }.
+router.put('/servers/:id/builds/:bid/offsets', requireSuperAdmin, validate(buildOverridesPutSchema), async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+
+  const server = await db('game_servers').where('id', serverId).select('id').first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).select('id').first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  const { overrides } = req.validated;
+
+  // Reject duplicate field_names in the payload (the override PK is
+  // (server_build_id, field_name); a dupe would make the "replace" ambiguous).
+  const seen = new Set();
+  for (const o of overrides) {
+    if (seen.has(o.field_name)) {
+      return res.status(400).json({ error: `Duplicate field_name: ${o.field_name}` });
+    }
+    seen.add(o.field_name);
+  }
+
+  // Validate every field_name against the catalog (400 on ANY unknown field).
+  if (overrides.length) {
+    const names = [...seen];
+    const known = await db('offset_field_catalog')
+      .whereIn('field_name', names)
+      .pluck('field_name');
+    const knownSet = new Set(known);
+    const unknown = names.filter(n => !knownSet.has(n));
+    if (unknown.length) {
+      return res.status(400).json({ error: 'Unknown field_name(s)', fields: unknown });
+    }
+  }
+
+  const now = nowSec();
+  await db.transaction(async (trx) => {
+    // Content changed → INVALIDATE this build's signed blob (must be re-signed).
+    await trx('server_builds').where('id', buildId).update({
+      signed_blob: null, signed_at: null, updated_at: now,
+    });
+    // REPLACE-ALL the per-build overrides.
+    await trx('server_build_overrides').where('server_build_id', buildId).del();
+    if (overrides.length) {
+      await trx('server_build_overrides').insert(
+        overrides.map(o => ({
+          server_build_id: buildId,
+          field_name:      o.field_name,
+          value:           o.value,
+          updated_at:      now,
+        })),
+      );
+    }
+  });
+
+  await recordAudit(db, req, {
+    action: 'world.build.set', subjectType: 'server_build', subjectId: String(buildId),
+    newValues: { override_count: overrides.length, invalidated_blob: true },
+  });
+  res.json({ ok: true, count: overrides.length });
+});
+
+// Sign ONE build in place: fields = merge(template_base, general overrides,
+// per-build overrides) with precedence build > general > template; buildBlob with
+// the build's OWN stamp/size; store on server_builds.signed_blob/signed_at. Throws
+// OffsetKeyAuthError on a wrong password (mapped to 403 by the caller). Returns the
+// field count. `server` + `keyRow` are read once by the caller and passed in.
+async function signOneBuild(server, serverId, build, password, encPrivateKey) {
+  const general = await generalEffectiveFields(server, serverId);
+  const buildOverrideRows = await db('server_build_overrides')
+    .where('server_build_id', build.id).select('field_name', 'value');
+  const fields = { ...general };                                   // template base + general
+  for (const r of buildOverrideRows) fields[r.field_name] = Number(r.value);   // per-build wins
+
+  const stamp = Number(build.stamp);
+  const size  = Number(build.size);
+  const blob = await buildBlob(serverId, stamp, size, fields, password, encPrivateKey);
+
+  const now = nowSec();
+  await db('server_builds').where('id', build.id).update({
+    signed_blob: JSON.stringify(blob), signed_at: now, updated_at: now,
+  });
+  return { fieldCount: Object.keys(fields).length, signed_at: now };
+}
+
+// ── POST /servers/:id/builds/:bid/sign ───────────────────────────────────────
+// Sign this build's effective set into a blob keyed to the BUILD's stamp/size.
+// 409 if no signing key exists; 403 on a WRONG password (typed AuthError, no leak).
+router.post('/servers/:id/builds/:bid/sign', requireSuperAdmin, validate(buildSignSchema), async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+  const { password } = req.validated;
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  const keyRow = await db('offset_signing_keys').where('id', KEY_ROW_ID).first();
+  if (!keyRow) {
+    return res.status(409).json({ error: 'generate a signing key first' });
+  }
+
+  let result;
+  try {
+    result = await signOneBuild(server, serverId, build, password, keyRow.enc_private_key);
+  } catch (err) {
+    if (err instanceof OffsetKeyAuthError) {
+      return res.status(403).json({ error: 'wrong signing password' });
+    }
+    throw err;
+  }
+
+  await recordAudit(db, req, {
+    action: 'world.build.sign', subjectType: 'server_build', subjectId: String(buildId),
+    newValues: { field_count: result.fieldCount, signed_at: result.signed_at },
+  });
+  res.json({ ok: true, signed_at: result.signed_at });
+});
+
+// ── POST /servers/:id/builds/sign-all ────────────────────────────────────────
+// Re-sign EVERY build of the server AND the server-level blob (038) with ONE
+// password. 409 if no signing key exists; 403 on a WRONG password (checked once —
+// the same key/password signs every blob). Returns { ok, signed: n } where n is
+// the number of blobs written (per-build + the server-level one).
+router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSignAllSchema), async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  const { password } = req.validated;
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const keyRow = await db('offset_signing_keys').where('id', KEY_ROW_ID).first();
+  if (!keyRow) {
+    return res.status(409).json({ error: 'generate a signing key first' });
+  }
+
+  const builds = await db('server_builds').where('server_id', serverId)
+    .select('id', 'stamp', 'size');
+
+  // Whether the server-level blob (038) can also be re-signed: only when the
+  // server carries a fingerprint (stamp/size). The server-level effective set is
+  // the GENERAL merge (template base + general overrides), keyed to the server's
+  // own fingerprint — exactly what POST /servers/:id/offsets/sign produces.
+  const hasServerFingerprint =
+    server.engine_time_date_stamp != null && server.engine_size_of_image != null;
+
+  let signed = 0;
+  const now = nowSec();
+  try {
+    // Per-build blobs.
+    for (const build of builds) {
+      await signOneBuild(server, serverId, build, password, keyRow.enc_private_key);
+      signed += 1;
+    }
+    // Server-level blob (only when a fingerprint is set) — same merge + crypto as
+    // POST /servers/:id/offsets/sign.
+    if (hasServerFingerprint) {
+      const fields = await generalEffectiveFields(server, serverId);
+      const blob = await buildBlob(
+        serverId, Number(server.engine_time_date_stamp), Number(server.engine_size_of_image),
+        fields, password, keyRow.enc_private_key,
+      );
+      await db('game_servers').where('id', serverId).update({
+        offset_signed_blob: JSON.stringify(blob), offset_signed_at: now,
+      });
+      signed += 1;
+    }
+  } catch (err) {
+    if (err instanceof OffsetKeyAuthError) {
+      return res.status(403).json({ error: 'wrong signing password' });
+    }
+    throw err;
+  }
+
+  await recordAudit(db, req, {
+    action: 'world.build.sign_all', subjectType: 'game_server', subjectId: String(serverId),
+    newValues: { signed, builds: builds.length, server_blob: hasServerFingerprint },
+  });
+  res.json({ ok: true, signed });
 });
 
 export default router;
