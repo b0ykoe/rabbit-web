@@ -32,7 +32,8 @@ import db from '../db.js';
 import { config } from '../config.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
 import { recordAudit } from '../services/auditLog.js';
-import { validate, offsetKeyGenSchema, offsetsPutSchema, offsetSignSchema } from '../validation/schemas.js';
+import { validate, offsetKeyGenSchema, offsetsPutSchema, offsetSignSchema,
+         templateCreateSchema, templateUpdateSchema, templateValuesPutSchema } from '../validation/schemas.js';
 import { generateKeypair, buildBlob, OffsetKeyAuthError } from '../crypto/offsetSigning.js';
 
 const router = Router();
@@ -151,7 +152,8 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
   // `value` (active variant), so accept those aliases too — base_value is the
   // Stock EP4 baseline, preferring base_default over the active value.
   const now = nowSec();
-  const byName = new Map();
+  const byName = new Map();          // field_name -> catalog row (name/kind/crit/base)
+  const activeByName = new Map();    // field_name -> ACTIVE value (running variant)
   for (const e of entries) {
     if (!e || typeof e !== 'object') continue;
     const rawName = (typeof e.field_name === 'string' && e.field_name) ? e.field_name
@@ -167,15 +169,24 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
       if (c) criticality = c.slice(0, 16);
     }
 
-    // Stock EP4 baseline: explicit base_value, else the exporter's base_default,
-    // else the active `value` as a last resort.
+    // Stock baseline for this field: explicit base_value, else the exporter's
+    // base_default (engine_variant_base). This is what the SEED template holds.
     const rawBase = e.base_value != null ? e.base_value
       : e.base_default != null ? e.base_default
-      : e.value;
+      : null;
     let baseValue = null;
     if (rawBase != null) {
       const bv = Number(rawBase);
       if (Number.isInteger(bv)) baseValue = bv;
+    }
+
+    // ACTIVE value on the exporting machine (the running variant, e.g. Nemesis).
+    // Used below to auto-derive that server's overrides = fields where it differs
+    // from the Stock base. Falls back to the base when no separate `value`.
+    const rawActive = e.value != null ? e.value : rawBase;
+    if (rawActive != null) {
+      const av = Number(rawActive);
+      if (Number.isInteger(av)) activeByName.set(fieldName, av);
     }
 
     byName.set(fieldName, {
@@ -190,18 +201,84 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
 
   const rows = [...byName.values()];
 
-  // REPLACE-ALL in one transaction: wipe the catalog, insert the validated set.
+  // The import feeds a BUILD TEMPLATE (the Stock base) and — when the export knows
+  // which server it came from — auto-derives that server's OVERRIDES (its deltas
+  // from Stock, e.g. Nemesis). template_name + target_server_id are optional multer
+  // form fields; otherwise the template defaults to "Stock EP4" and the target is
+  // the server_id the bot recorded in the export.
+  const templateName = (typeof req.body?.template_name === 'string' && req.body.template_name.trim())
+    ? req.body.template_name.trim().slice(0, 64)
+    : 'Stock EP4';
+  let targetServerId = 0;
+  const bodySid   = Number(req.body?.target_server_id);
+  const exportSid = Number(parsed?.server_id);
+  if (Number.isInteger(bodySid) && bodySid > 0) targetServerId = bodySid;
+  else if (Number.isInteger(exportSid) && exportSid > 0) targetServerId = exportSid;
+
+  let templateId = null;
+  let overrideCount = 0;
+  let appliedServerId = null;
+
   await db.transaction(async (trx) => {
+    // 1) REPLACE-ALL the global field universe (names / kinds / criticality / base).
     await trx('offset_field_catalog').del();
     if (rows.length) await trx('offset_field_catalog').insert(rows);
+
+    // 2) Upsert the build template from the Stock base values (REPLACE-ALL its set).
+    const existingTpl = await trx('build_templates').where('name', templateName).first();
+    if (existingTpl) {
+      templateId = existingTpl.id;
+      await trx('build_templates').where('id', templateId).update({ updated_at: now });
+    } else {
+      const [id] = await trx('build_templates').insert({
+        name: templateName, notes: 'Imported from a bot offset catalog.',
+        created_at: now, updated_at: now,
+      });
+      templateId = id;
+    }
+    await trx('template_field_values').where('template_id', templateId).del();
+    const tplRows = rows
+      .filter(r => r.base_value != null)
+      .map(r => ({ template_id: templateId, field_name: r.field_name, value: r.base_value }));
+    if (tplRows.length) await trx('template_field_values').insert(tplRows);
+
+    // 3) Auto-derive the exporting server's overrides = fields whose ACTIVE value
+    //    differs from the Stock base. Points the server at this template, REPLACE-ALL
+    //    its overrides, and clears any stale signed blob (content changed).
+    if (targetServerId > 0) {
+      const srv = await trx('game_servers').where('id', targetServerId).select('id').first();
+      if (srv) {
+        const overrideRows = [];
+        for (const r of rows) {
+          if (r.base_value == null) continue;
+          const av = activeByName.get(r.field_name);
+          if (av == null || av === r.base_value) continue;   // no delta
+          overrideRows.push({ server_id: targetServerId, field_name: r.field_name, value: av, updated_at: now });
+        }
+        await trx('game_servers').where('id', targetServerId).update({
+          offset_template_id: templateId,
+          offset_signed_blob: null,
+          offset_signed_at:   null,
+        });
+        await trx('server_offset_overrides').where('server_id', targetServerId).del();
+        if (overrideRows.length) await trx('server_offset_overrides').insert(overrideRows);
+        overrideCount   = overrideRows.length;
+        appliedServerId = targetServerId;
+      }
+    }
   });
 
   await recordAudit(db, req, {
     action: 'world.offset_catalog.import', subjectType: 'offset_field_catalog',
-    newValues: { count: rows.length },
+    newValues: { count: rows.length, template_id: templateId, template_name: templateName,
+                 applied_server_id: appliedServerId, override_count: overrideCount },
   });
 
-  res.json({ ok: true, count: rows.length });
+  res.json({
+    ok: true, count: rows.length,
+    template_id: templateId, template_name: templateName,
+    applied_server_id: appliedServerId, override_count: overrideCount,
+  });
 });
 
 // ── GET /servers/:id/offsets ─────────────────────────────────────────────────
@@ -217,13 +294,19 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
   const server = await db('game_servers').where('id', serverId).first();
   if (!server) return res.status(404).json({ error: 'Server not found' });
 
-  const [catalogRows, overrideRows] = await Promise.all([
+  const templateId = server.offset_template_id != null ? Number(server.offset_template_id) : null;
+
+  const [catalogRows, overrideRows, templateValueRows, templateList] = await Promise.all([
     db('offset_field_catalog')
       .select('field_name', 'kind', 'criticality', 'base_value')
       .orderBy('field_name', 'asc'),
     db('server_offset_overrides')
       .where('server_id', serverId)
       .select('field_name', 'value'),
+    templateId != null
+      ? db('template_field_values').where('template_id', templateId).select('field_name', 'value')
+      : Promise.resolve([]),
+    db('build_templates').select('id', 'name').orderBy('name', 'asc'),
   ]);
 
   // BIGINT columns arrive as strings from mysql2; normalize to Number for the
@@ -231,12 +314,14 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
   const num = (v) => (v == null ? null : Number(v));
 
   const overrideByName = new Map(overrideRows.map(r => [r.field_name, num(r.value)]));
-  const catalog = catalogRows.map(r => ({
-    field_name:  r.field_name,
-    kind:        r.kind,
-    criticality: r.criticality,
-    base_value:  num(r.base_value),
-  }));
+  const templateByName = new Map(templateValueRows.map(r => [r.field_name, num(r.value)]));
+
+  // Base for a field = the server's template value, else the catalog's compiled
+  // fallback (base_value). Effective = the override, else the base.
+  const catalog = catalogRows.map(r => {
+    const base = templateByName.has(r.field_name) ? templateByName.get(r.field_name) : num(r.base_value);
+    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base };
+  });
   const overrides = catalog
     .filter(c => overrideByName.has(c.field_name))
     .map(c => ({ field_name: c.field_name, value: overrideByName.get(c.field_name) }));
@@ -251,6 +336,8 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
       stamp: num(server.engine_time_date_stamp),
       size:  num(server.engine_size_of_image),
     },
+    template_id: templateId,
+    templates:   templateList.map(t => ({ id: Number(t.id), name: t.name })),
     catalog,
     overrides,
     effective,
@@ -273,7 +360,13 @@ router.put('/servers/:id/offsets', requireSuperAdmin, validate(offsetsPutSchema)
   const server = await db('game_servers').where('id', serverId).first();
   if (!server) return res.status(404).json({ error: 'Server not found' });
 
-  const { stamp, size, overrides } = req.validated;
+  const { stamp, size, overrides, offset_template_id } = req.validated;
+
+  // Validate the chosen template exists (when a non-null id is supplied).
+  if (offset_template_id != null) {
+    const tpl = await db('build_templates').where('id', offset_template_id).select('id').first();
+    if (!tpl) return res.status(400).json({ error: 'Unknown template' });
+  }
 
   // Reject duplicate field_names in the payload (an override PK is
   // (server_id, field_name); a dupe would make the "replace" ambiguous).
@@ -304,6 +397,8 @@ router.put('/servers/:id/offsets', requireSuperAdmin, validate(offsetsPutSchema)
     const patch = {};
     if (stamp !== undefined) patch.engine_time_date_stamp = stamp;
     if (size  !== undefined) patch.engine_size_of_image   = size;
+    // offset_template_id: undefined = leave, null = clear, id = set.
+    if (offset_template_id !== undefined) patch.offset_template_id = offset_template_id;
     // Content changed → INVALIDATE the signed blob (must be re-signed).
     patch.offset_signed_blob = null;
     patch.offset_signed_at   = null;
@@ -364,12 +459,21 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   const stamp = Number(server.engine_time_date_stamp);
   const size  = Number(server.engine_size_of_image);
 
-  const overrideRows = await db('server_offset_overrides')
-    .where('server_id', serverId)
-    .select('field_name', 'value');
-  // fields object: { field_name: int, ... }. BIGINT values arrive as strings.
+  // The blob carries the FULL EFFECTIVE offset set = the server's build-template
+  // base MERGED WITH its overrides (override wins). This makes the panel
+  // authoritative: the bot applies every field it's given (fields the panel doesn't
+  // manage — no template value, no override — are simply absent and keep the bot's
+  // compiled value). BIGINT values arrive as strings from mysql2.
+  const [templateValueRows, overrideRows] = await Promise.all([
+    server.offset_template_id != null
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      : Promise.resolve([]),
+    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+  ]);
   const fields = {};
-  for (const r of overrideRows) fields[r.field_name] = Number(r.value);
+  for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
+  for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
+  const fieldCount = Object.keys(fields).length;
 
   let blob;
   try {
@@ -390,10 +494,158 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   // Audit the signing event — NEVER the password.
   await recordAudit(db, req, {
     action: 'world.offset.sign', subjectType: 'game_server', subjectId: String(serverId),
-    newValues: { field_count: overrideRows.length, signed_at: now },
+    newValues: { field_count: fieldCount, signed_at: now },
   });
 
   res.json({ ok: true, signed_at: now });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Build templates (Phase 1) — named per-edition base value-sets that servers fork.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET /offset-templates — list with per-template field + server-usage counts.
+router.get('/offset-templates', requireSuperAdmin, async (req, res) => {
+  const [templates, fieldCounts, serverCounts] = await Promise.all([
+    db('build_templates').select('id', 'name', 'notes', 'created_at', 'updated_at').orderBy('name', 'asc'),
+    db('template_field_values').select('template_id').count({ c: '*' }).groupBy('template_id'),
+    db('game_servers').whereNotNull('offset_template_id').select('offset_template_id').count({ c: '*' }).groupBy('offset_template_id'),
+  ]);
+  const fc = new Map(fieldCounts.map(r => [Number(r.template_id), Number(r.c)]));
+  const sc = new Map(serverCounts.map(r => [Number(r.offset_template_id), Number(r.c)]));
+  res.json(templates.map(t => ({
+    id: Number(t.id), name: t.name, notes: t.notes,
+    field_count: fc.get(Number(t.id)) || 0,
+    servers_using: sc.get(Number(t.id)) || 0,
+    created_at: Number(t.created_at), updated_at: Number(t.updated_at),
+  })));
+});
+
+// GET /offset-templates/:id — the template + its per-field values joined against
+// the catalog (so the editor can list every field, value null = uses no base).
+router.get('/offset-templates/:id', requireSuperAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'Bad template id' });
+  const tpl = await db('build_templates').where('id', id).first();
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  const [catalogRows, valueRows] = await Promise.all([
+    db('offset_field_catalog').select('field_name', 'kind', 'criticality').orderBy('field_name', 'asc'),
+    db('template_field_values').where('template_id', id).select('field_name', 'value'),
+  ]);
+  const num = (v) => (v == null ? null : Number(v));
+  const valByName = new Map(valueRows.map(r => [r.field_name, num(r.value)]));
+  res.json({
+    id: Number(tpl.id), name: tpl.name, notes: tpl.notes,
+    fields: catalogRows.map(c => ({
+      field_name: c.field_name, kind: c.kind, criticality: c.criticality,
+      value: valByName.has(c.field_name) ? valByName.get(c.field_name) : null,
+    })),
+  });
+});
+
+// POST /offset-templates — create an empty template (409 on dup name).
+router.post('/offset-templates', requireSuperAdmin, validate(templateCreateSchema), async (req, res) => {
+  const { name, notes } = req.validated;
+  const trimmed = name.trim();
+  if (!trimmed) return res.status(422).json({ error: 'name is required' });
+  const dup = await db('build_templates').where('name', trimmed).select('id').first();
+  if (dup) return res.status(409).json({ error: 'A template with that name already exists' });
+  const now = nowSec();
+  const [id] = await db('build_templates').insert({
+    name: trimmed, notes: notes ?? null, created_at: now, updated_at: now,
+  });
+  await recordAudit(db, req, {
+    action: 'world.template.create', subjectType: 'build_template', subjectId: String(id),
+    newValues: { name: trimmed },
+  });
+  res.status(201).json({ id: Number(id), name: trimmed });
+});
+
+// PATCH /offset-templates/:id — rename / edit notes (409 on dup name).
+router.patch('/offset-templates/:id', requireSuperAdmin, validate(templateUpdateSchema), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'Bad template id' });
+  const tpl = await db('build_templates').where('id', id).first();
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  const { name, notes } = req.validated;
+  const patch = { updated_at: nowSec() };
+  if (name !== undefined) {
+    const trimmed = name.trim();
+    if (!trimmed) return res.status(422).json({ error: 'name cannot be empty' });
+    const dup = await db('build_templates').where('name', trimmed).whereNot('id', id).select('id').first();
+    if (dup) return res.status(409).json({ error: 'A template with that name already exists' });
+    patch.name = trimmed;
+  }
+  if (notes !== undefined) patch.notes = notes;
+  await db('build_templates').where('id', id).update(patch);
+  await recordAudit(db, req, {
+    action: 'world.template.update', subjectType: 'build_template', subjectId: String(id),
+    newValues: { name: patch.name ?? tpl.name },
+  });
+  res.json({ ok: true });
+});
+
+// DELETE /offset-templates/:id — remove it + its values, and unlink any servers
+// that forked it (they fall back to the catalog base until re-pointed).
+router.delete('/offset-templates/:id', requireSuperAdmin, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'Bad template id' });
+  const tpl = await db('build_templates').where('id', id).select('id', 'name').first();
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  await db.transaction(async (trx) => {
+    // Servers that forked this template lose their base + must re-sign.
+    await trx('game_servers').where('offset_template_id', id)
+      .update({ offset_template_id: null, offset_signed_blob: null, offset_signed_at: null });
+    await trx('template_field_values').where('template_id', id).del();
+    await trx('build_templates').where('id', id).del();
+  });
+  await recordAudit(db, req, {
+    action: 'world.template.delete', subjectType: 'build_template', subjectId: String(id),
+    oldValues: { name: tpl.name },
+  });
+  res.json({ ok: true });
+});
+
+// PUT /offset-templates/:id/values — REPLACE-ALL the template's base field values
+// (the editor's save). Validates names against the catalog. Invalidates the signed
+// blob of every server forking this template (their base just changed → re-sign).
+router.put('/offset-templates/:id/values', requireSuperAdmin, validate(templateValuesPutSchema), async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id) || id < 0) return res.status(400).json({ error: 'Bad template id' });
+  const tpl = await db('build_templates').where('id', id).select('id').first();
+  if (!tpl) return res.status(404).json({ error: 'Template not found' });
+  const { values } = req.validated;
+
+  const seen = new Set();
+  for (const v of values) {
+    if (seen.has(v.field_name)) return res.status(400).json({ error: `Duplicate field_name: ${v.field_name}` });
+    seen.add(v.field_name);
+  }
+  if (values.length) {
+    const known = await db('offset_field_catalog').whereIn('field_name', [...seen]).pluck('field_name');
+    const knownSet = new Set(known);
+    const unknown = [...seen].filter(n => !knownSet.has(n));
+    if (unknown.length) return res.status(400).json({ error: 'Unknown field_name(s)', fields: unknown });
+  }
+
+  const now = nowSec();
+  await db.transaction(async (trx) => {
+    await trx('template_field_values').where('template_id', id).del();
+    if (values.length) {
+      await trx('template_field_values').insert(
+        values.map(v => ({ template_id: id, field_name: v.field_name, value: v.value })),
+      );
+    }
+    await trx('build_templates').where('id', id).update({ updated_at: now });
+    // Base changed → servers forking this template must re-sign.
+    await trx('game_servers').where('offset_template_id', id)
+      .update({ offset_signed_blob: null, offset_signed_at: null });
+  });
+  await recordAudit(db, req, {
+    action: 'world.template.set_values', subjectType: 'build_template', subjectId: String(id),
+    newValues: { count: values.length },
+  });
+  res.json({ ok: true, count: values.length });
 });
 
 export default router;

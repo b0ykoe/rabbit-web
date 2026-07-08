@@ -90,13 +90,17 @@ export default function UploadDropZone({
         '&:focus-visible': { borderColor: 'primary.main' },
       }}
     >
+      {/* Visually hidden but STILL in the layout tree — a display:none / `hidden`
+          input makes a programmatic inputRef.click() a no-op in some browsers, which
+          is why "click to browse" did nothing while drag-drop worked. */}
       <input
         ref={inputRef}
         type="file"
         accept={accept}
         multiple={multiple}
-        hidden
         onChange={onPicked}
+        style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+        tabIndex={-1}
       />
       {busy ? (
         <CircularProgress size={22} />

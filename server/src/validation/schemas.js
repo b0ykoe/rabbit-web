@@ -362,6 +362,9 @@ export const offsetKeyGenSchema = z.object({
 export const offsetsPutSchema = z.object({
   stamp:     z.coerce.number().int().nonnegative().optional(),
   size:      z.coerce.number().int().nonnegative().optional(),
+  // Which build template this server forks (Phase 1). null clears it; omit to leave
+  // unchanged. A missing value on a field falls back to the template's base value.
+  offset_template_id: z.coerce.number().int().positive().nullable().optional(),
   overrides: z.array(z.object({
     field_name: z.string().min(1).max(64),
     value:      z.coerce.number().int(),
@@ -373,6 +376,31 @@ export const offsetsPutSchema = z.object({
 // in the route via the crypto module's typed auth error.
 export const offsetSignSchema = z.object({
   password: z.string().min(1),
+});
+
+// ── Admin: Build templates (world, 039 — Phase 1) ────────────────────────────
+// A build template is a named per-edition base value-set (Stock EP4, Stock EP2, …)
+// that servers fork. name 1..64; notes ≤255.
+export const templateCreateSchema = z.object({
+  name:  z.string().min(1).max(64),
+  notes: z.string().max(255).nullable().optional(),
+});
+
+export const templateUpdateSchema = z.object({
+  name:  z.string().min(1).max(64).optional(),
+  notes: z.string().max(255).nullable().optional(),
+}).refine(
+  d => d.name !== undefined || d.notes !== undefined,
+  { message: 'Provide at least one field to update' },
+);
+
+// PUT /offset-templates/:id/values — REPLACE-ALL a template's base field values.
+// Each field_name is validated against offset_field_catalog in the route.
+export const templateValuesPutSchema = z.object({
+  values: z.array(z.object({
+    field_name: z.string().min(1).max(64),
+    value:      z.coerce.number().int(),
+  })).max(2000),
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
