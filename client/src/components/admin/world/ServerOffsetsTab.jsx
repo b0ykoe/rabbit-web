@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
-  Box, Stack, Paper, Typography, TextField, Button, Chip, Alert, Skeleton, Tooltip,
+  Box, Stack, Paper, Typography, TextField, Button, Chip, Alert, Skeleton, Tooltip, Link,
 } from '@mui/material';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
-import OffsetKeyCatalogPanel from './OffsetKeyCatalogPanel.jsx';
 import OffsetFieldTable, { parseIntFlexible, hasInvalidOverride } from './OffsetFieldTable.jsx';
 import SignOffsetsDialog from './SignOffsetsDialog.jsx';
 
@@ -127,17 +127,6 @@ export default function ServerOffsetsTab({ server }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Reload just the key state (after generate) — leaves the working copy alone.
-  const reloadKey = useCallback(async () => {
-    try { setKeyState(await adminApi.getOffsetKey()); } catch { /* best-effort */ }
-  }, []);
-
-  // Reload the server offsets (after a catalog import) — re-seeds the table so the
-  // new catalog shows. Preserves nothing unsaved by design (import is a base change).
-  const reloadOffsets = useCallback(async () => {
-    try { await loadOffsets(); } catch (err) { showSnackbar(errMsg(err, 'Failed to reload offsets'), 'error'); }
-  }, [loadOffsets, showSnackbar]);
-
   // ── Field-table change → mark dirty ────────────────────────────────────────
   const onFieldChange = useCallback((fieldName, raw) => {
     setOverrides((prev) => ({ ...prev, [fieldName]: raw }));
@@ -232,12 +221,16 @@ export default function ServerOffsetsTab({ server }) {
 
   return (
     <Stack spacing={2.5}>
-      {/* (a) Portal-wide signing key + field catalog. */}
-      <OffsetKeyCatalogPanel
-        keyState={keyState}
-        onKeyChanged={reloadKey}
-        onCatalogChanged={reloadOffsets}
-      />
+      {/* The signing key + field catalog are portal-wide and live on the Offset
+          signing page. Surface a hint here only when the key is missing, since
+          Sign would 409 without it. */}
+      {keyState && !keyState.exists && (
+        <Alert severity="warning">
+          No signing key yet — generate one on the{' '}
+          <Link component={RouterLink} to="/admin/world/offsets">Offset signing</Link>{' '}
+          page (and import the field catalog there) before you can sign this server's overrides.
+        </Alert>
+      )}
 
       {notFound ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
@@ -245,8 +238,8 @@ export default function ServerOffsetsTab({ server }) {
             No offset set for this server yet
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Import the field catalog above, then set the engine fingerprint and any
-            per-field overrides. Nothing is stored until you Save.
+            Import the field catalog on the Offset signing page, then set the engine
+            fingerprint and any per-field overrides. Nothing is stored until you Save.
           </Typography>
         </Paper>
       ) : (

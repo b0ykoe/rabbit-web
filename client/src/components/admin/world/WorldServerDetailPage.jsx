@@ -138,7 +138,7 @@ export default function WorldServerDetailPage() {
           {backButton}
           <Breadcrumbs aria-label="breadcrumb">
             <Link component={RouterLink} to="/admin/world" underline="hover" color="inherit">
-              Monster Map
+              Servers
             </Link>
             <Typography color="text.primary">server #{id}</Typography>
           </Breadcrumbs>
@@ -166,7 +166,7 @@ export default function WorldServerDetailPage() {
         {backButton}
         <Breadcrumbs aria-label="breadcrumb">
           <Link component={RouterLink} to="/admin/world" underline="hover" color="inherit">
-            Monster Map
+            Servers
           </Link>
           <Typography color="text.primary" noWrap>
             {loading && !server ? <Skeleton width={120} /> : displayName}
@@ -174,14 +174,13 @@ export default function WorldServerDetailPage() {
         </Breadcrumbs>
       </Box>
 
-      {/* Title row: name + variant + visibility + known-IP chips (read-only here) */}
+      {/* Title row: name + visibility + known-IP chips (read-only here) */}
       <Box sx={{ mb: 2 }}>
         {loading && !server ? (
           <Skeleton variant="text" width="40%" height={40} />
         ) : (
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
             <Typography variant="h5" fontWeight={700} sx={{ mr: 0.5 }}>{displayName}</Typography>
-            <Chip label={server?.variant || 'Unknown'} size="small" variant="outlined" />
             <Chip
               label={server?.visible ? 'Public' : 'Hidden'}
               size="small"

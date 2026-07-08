@@ -200,7 +200,7 @@ export default function OffsetFieldTable({ catalog, effective, value, onChange }
                   <Typography variant="body2" color="text.secondary">
                     {q.trim()
                       ? 'No fields match your search.'
-                      : 'No catalog fields yet — import offsets_catalog.json above.'}
+                      : 'No catalog fields yet — import offsets_catalog.json on the Offset signing page.'}
                   </Typography>
                 </TableCell>
               </TableRow>

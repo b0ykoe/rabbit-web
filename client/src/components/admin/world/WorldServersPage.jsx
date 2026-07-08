@@ -6,7 +6,7 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import KeyIcon from '@mui/icons-material/VpnKey';
 import ConfirmationNumberIcon from '@mui/icons-material/ConfirmationNumber';
-import LabelIcon from '@mui/icons-material/Label';
+import TuneIcon from '@mui/icons-material/Tune';
 import { adminApi } from '../../../api/endpoints.js';
 import { useApi } from '../../../hooks/useApi.js';
 import ServerCard from './ServerCard.jsx';
@@ -36,7 +36,7 @@ export default function WorldServersPage() {
       {/* Header */}
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 2, mb: 1, flexWrap: 'wrap' }}>
         <Box>
-          <Typography variant="h5" fontWeight={700}>Monster Map — Servers</Typography>
+          <Typography variant="h5" fontWeight={700}>Servers</Typography>
           <Typography variant="caption" color="text.secondary">
             Admin-defined game servers. Open one to manage its names, coverage, backgrounds and spawn data.
           </Typography>
@@ -55,10 +55,10 @@ export default function WorldServersPage() {
             Grant recording key
           </Button>
           <Button
-            size="small" variant="outlined" startIcon={<LabelIcon fontSize="small" />}
-            onClick={() => navigate('/admin/world/variants')}
+            size="small" variant="outlined" startIcon={<TuneIcon fontSize="small" />}
+            onClick={() => navigate('/admin/world/offsets')}
           >
-            Manage variants
+            Offset signing
           </Button>
           <Button
             size="small" variant="text" startIcon={<ConfirmationNumberIcon fontSize="small" />}

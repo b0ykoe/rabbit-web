@@ -33,7 +33,7 @@ const navItems = [
   { label: 'Sessions',  icon: <SensorsIcon />,     path: '/admin/sessions' },
   { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
-  { label: 'Monster Map', icon: <PublicIcon />,    path: '/admin/world', superAdmin: true },
+  { label: 'Servers', icon: <PublicIcon />,    path: '/admin/world', superAdmin: true },
   { label: 'Recording Sessions', icon: <FiberSmartRecordIcon />, path: '/admin/recording-sessions', superAdmin: true },
   { label: 'Settings',  icon: <SettingsIcon />,    path: '/admin/settings' },
 ];

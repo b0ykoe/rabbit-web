@@ -79,7 +79,7 @@ export default function IngestTokensPage() {
         <Alert severity="warning">Ingest-token administration is super-admin only.</Alert>
       ) : (
         <>
-          <Typography variant="h5" fontWeight={700} sx={{ mb: 3 }}>Monster Map — Ingest Tokens</Typography>
+          <Typography variant="h5" fontWeight={700} sx={{ mb: 3 }}>Servers — Ingest Tokens</Typography>
 
           {/* Mint */}
           <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>

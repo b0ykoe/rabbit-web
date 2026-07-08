@@ -17,11 +17,11 @@ import Statuses from './components/admin/Statuses.jsx';
 import AuditLog from './components/admin/AuditLog.jsx';
 import AdminSettings from './components/admin/Settings.jsx';
 
-// Admin World (Monster Map) — super-admin-only subtree.
+// Admin World (Servers) — super-admin-only subtree.
 import WorldOutlet from './components/admin/world/WorldOutlet.jsx';
 import WorldServersPage from './components/admin/world/WorldServersPage.jsx';
 import IngestTokensPage from './components/admin/world/IngestTokensPage.jsx';
-import VariantsPage from './components/admin/world/VariantsPage.jsx';
+import OffsetSigningPage from './components/admin/world/OffsetSigningPage.jsx';
 import WorldServerDetailPage from './components/admin/world/WorldServerDetailPage.jsx';
 
 // Portal
@@ -60,7 +60,7 @@ export default function AppRouter() {
         <Route path="sessions" element={<Sessions />} />
         <Route path="statuses" element={<Statuses />} />
         <Route path="audit" element={<AuditLog />} />
-        {/* Admin World (Monster Map) — guarded ONCE at super_admin via WorldOutlet. */}
+        {/* Admin World (Servers) — guarded ONCE at super_admin via WorldOutlet. */}
         <Route path="world" element={
           <ProtectedRoute role="super_admin">
             <WorldOutlet />
@@ -68,7 +68,7 @@ export default function AppRouter() {
         }>
           <Route index element={<WorldServersPage />} />
           <Route path="tokens" element={<IngestTokensPage />} />
-          <Route path="variants" element={<VariantsPage />} />
+          <Route path="offsets" element={<OffsetSigningPage />} />
           <Route path="servers/:id" element={<WorldServerDetailPage />} />
           <Route path="servers/:id/:tab" element={<WorldServerDetailPage />} />
         </Route>

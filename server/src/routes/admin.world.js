@@ -437,9 +437,11 @@ router.post('/servers', requireSuperAdmin, validate(serverCreateSchema), async (
   const now = nowSec();
 
   const trimmedName = name.trim();
-  const trimmedVariant = variant.trim();
-  if (!trimmedName || !trimmedVariant) {
-    return res.status(422).json({ error: 'name and variant are required' });
+  // variant is vestigial + optional now (a server IS its own build). Store '' when
+  // absent — the column is NOT NULL, so an empty string is the safe stand-in.
+  const trimmedVariant = (variant || '').trim();
+  if (!trimmedName) {
+    return res.status(422).json({ error: 'name is required' });
   }
 
   const serverId = await db.transaction(async (trx) => {
@@ -456,20 +458,21 @@ router.post('/servers', requireSuperAdmin, validate(serverCreateSchema), async (
       last_seen:    now,
     });
 
-    // Auto-register the variant into game_variants (037) when it isn't already a
-    // managed row, so an admin-created server with a fresh variant self-registers
-    // into the picker. name is the join key = game_servers.variant. Guarded on
-    // the UNIQUE(name) so a known variant is a no-op (never overwrites labels).
-    const knownVariant = await trx('game_variants').where('name', trimmedVariant).select('id').first();
-    if (!knownVariant) {
-      await trx('game_variants').insert({
-        name:         trimmedVariant,
-        display_name: null,
-        notes:        null,
-        archived:     false,
-        created_at:   now,
-        updated_at:   now,
-      });
+    // Legacy: a non-empty variant self-registers into game_variants (037) so any
+    // still-existing label list stays consistent. Skipped entirely for the common
+    // empty-variant case now that the UI no longer collects one.
+    if (trimmedVariant) {
+      const knownVariant = await trx('game_variants').where('name', trimmedVariant).select('id').first();
+      if (!knownVariant) {
+        await trx('game_variants').insert({
+          name:         trimmedVariant,
+          display_name: null,
+          notes:        null,
+          archived:     false,
+          created_at:   now,
+          updated_at:   now,
+        });
+      }
     }
 
     // Seed known IPs; dedupe on the game_server_hosts UNIQUE(ip). A collision

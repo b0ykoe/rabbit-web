@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Box, Stack, Paper, Typography, TextField, MenuItem, Switch, Alert, Button,
+  Box, Stack, Paper, Typography, TextField, Switch, Alert, Button,
   Link, Tooltip, InputAdornment, CircularProgress, Divider,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions,
 } from '@mui/material';
@@ -9,14 +9,8 @@ import CheckIcon from '@mui/icons-material/Check';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
-import { useVariantOptions } from './useVariantOptions.js';
 import KnownIpsEditor from './KnownIpsEditor.jsx';
 import MergeServerDialog from './MergeServerDialog.jsx';
-
-// Sentinel Select value that reveals the free-text variant field. Variant is free
-// text on the server (VARCHAR 32); the managed variant list is just a shortlist —
-// a custom value self-registers into game_variants on save (C1 auto-upsert).
-const CUSTOM_VARIANT = '__custom__';
 
 // A titled section wrapper — outlined Paper with a heading + optional caption.
 function SettingsCard({ title, caption, children }) {
@@ -40,18 +34,12 @@ function SettingsCard({ title, caption, children }) {
 export default function ServerSettingsTab({ server, onChanged }) {
   const navigate = useNavigate();
   const { showSnackbar } = useSnackbar();
-  const { options: variantOptions } = useVariantOptions();
   const id = server?.id;
 
   // ── Identity: name ─────────────────────────────────────────────────────────
   const [name, setName]         = useState(server?.name || '');
   const [nameSaving, setNameSaving] = useState(false);
   const [nameSaved, setNameSaved]   = useState(false);
-
-  // ── Identity: variant ──────────────────────────────────────────────────────
-  const [variantSel, setVariantSel]   = useState('');
-  const [variantCustom, setVariantCustom] = useState('');
-  const [variantSaving, setVariantSaving] = useState(false);
 
   // ── Visibility ─────────────────────────────────────────────────────────────
   const [visible, setVisible]   = useState(!!server?.visible);
@@ -84,19 +72,13 @@ export default function ServerSettingsTab({ server, onChanged }) {
     }
   };
 
-  // Re-seed local fields whenever the underlying server row OR the loaded variant
-  // options change (e.g. refetch after a save, navigating between servers without
-  // unmounting, or the variants list arriving async). A variant not in the managed
-  // list resolves to the Custom… row so the free-text field is prefilled.
+  // Re-seed local fields whenever the underlying server row changes (e.g. refetch
+  // after a save, or navigating between servers without unmounting).
   useEffect(() => {
     setName(server?.name || '');
-    const v = server?.variant || '';
-    const known = variantOptions.some((o) => o.name === v);
-    setVariantSel(known || !v ? v : CUSTOM_VARIANT);
-    setVariantCustom(known ? '' : v);
     setVisible(!!server?.visible);
     setLocalIps(server?.known_ips || []);
-  }, [server, variantOptions]);
+  }, [server]);
 
   const errMsg = (err, fallback) => err?.data?.error || err?.message || fallback;
 
@@ -117,34 +99,6 @@ export default function ServerSettingsTab({ server, onChanged }) {
     } finally {
       setNameSaving(false);
     }
-  };
-
-  // ── Variant autosave ───────────────────────────────────────────────────────
-  const commitVariant = async (nextVariant) => {
-    const v = (nextVariant ?? '').trim();
-    if (!v || v === (server?.variant || '')) return;
-    setVariantSaving(true);
-    try {
-      await adminApi.updateWorldServer(id, { variant: v });
-      showSnackbar('Variant updated');
-      onChanged?.();
-    } catch (err) {
-      showSnackbar(errMsg(err, 'Variant update failed'), 'error');
-      // revert selection to reflect the server's persisted value
-      const pv = server?.variant || '';
-      const known = variantOptions.some((o) => o.name === pv);
-      setVariantSel(known || !pv ? pv : CUSTOM_VARIANT);
-      setVariantCustom(known ? '' : pv);
-    } finally {
-      setVariantSaving(false);
-    }
-  };
-
-  const handleVariantSelect = (e) => {
-    const val = e.target.value;
-    setVariantSel(val);
-    if (val === CUSTOM_VARIANT) return;          // wait for free-text entry
-    commitVariant(val);
   };
 
   // ── Visibility toggle (optimistic) ─────────────────────────────────────────
@@ -203,51 +157,24 @@ export default function ServerSettingsTab({ server, onChanged }) {
       {/* IDENTITY */}
       <SettingsCard
         title="Identity"
-        caption="How this server is labelled across the admin and user maps."
+        caption="The server's display name across the admin and user maps. Its build is identified by the Engine.dll fingerprint on the Offsets tab — there is no separate variant."
       >
-        <Stack spacing={2}>
-          <TextField
-            label="Name" size="small" value={name} disabled={nameSaving} fullWidth
-            inputProps={{ maxLength: 128 }}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={saveName}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
-            InputProps={{
-              endAdornment: (nameSaving || nameSaved) ? (
-                <InputAdornment position="end">
-                  {nameSaving
-                    ? <CircularProgress size={16} />
-                    : <CheckIcon fontSize="small" color="success" />}
-                </InputAdornment>
-              ) : undefined,
-            }}
-          />
-
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <TextField
-              select label="Variant" size="small" value={variantSel} disabled={variantSaving}
-              onChange={handleVariantSelect}
-              sx={{ minWidth: 200 }}
-            >
-              {variantOptions.map((v) => (
-                <MenuItem key={v.name} value={v.name}>
-                  {v.display_name ? `${v.display_name} (${v.name})` : v.name}
-                </MenuItem>
-              ))}
-              <MenuItem value={CUSTOM_VARIANT}>Custom…</MenuItem>
-            </TextField>
-            {variantSel === CUSTOM_VARIANT && (
-              <TextField
-                label="Custom variant" size="small" value={variantCustom} disabled={variantSaving}
-                autoFocus inputProps={{ maxLength: 32 }} sx={{ minWidth: 200 }}
-                onChange={(e) => setVariantCustom(e.target.value)}
-                onBlur={() => commitVariant(variantCustom)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
-              />
-            )}
-            {variantSaving && <CircularProgress size={16} sx={{ mt: 1.25 }} />}
-          </Box>
-        </Stack>
+        <TextField
+          label="Name" size="small" value={name} disabled={nameSaving} fullWidth
+          inputProps={{ maxLength: 128 }}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={saveName}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }}
+          InputProps={{
+            endAdornment: (nameSaving || nameSaved) ? (
+              <InputAdornment position="end">
+                {nameSaving
+                  ? <CircularProgress size={16} />
+                  : <CheckIcon fontSize="small" color="success" />}
+              </InputAdornment>
+            ) : undefined,
+          }}
+        />
       </SettingsCard>
 
       {/* VISIBILITY */}

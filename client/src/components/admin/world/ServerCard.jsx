@@ -132,12 +132,6 @@ export default function ServerCard({ server, onChanged }) {
             <Typography variant="h6" fontWeight={600} noWrap>
               {server.name || `Server #${server.id}`}
             </Typography>
-            <Chip
-              label={server.variant || 'Unknown'}
-              size="small"
-              variant="outlined"
-              sx={{ mt: 0.5, height: 20 }}
-            />
           </Box>
 
           {/* Coverage strip — GET /servers counts + the B1 per-zone rollups. The

@@ -277,12 +277,14 @@ export const ingestTokenMintSchema = z.object({
 
 // ── Admin: Monster-map per-server management (world) ──────────────────────────
 // POST /api/admin/world/servers — create an admin-defined NAMED server (034).
-// name + variant are required; visible defaults false (publish is an explicit
-// follow-up). known_ips seeds game_server_hosts so the bot can preselect this
-// server by its game socket IP.
+// name is required; visible defaults false (publish is an explicit follow-up).
+// known_ips seeds game_server_hosts so the bot can preselect this server by its
+// game socket IP. `variant` is now OPTIONAL + vestigial — a server IS its own
+// build (identified by its Engine.dll fingerprint on the Offsets tab), so the
+// UI no longer collects it; kept in the schema only for legacy/back-compat.
 export const serverCreateSchema = z.object({
   name:      z.string().min(1).max(128),
-  variant:   z.string().min(1).max(32),
+  variant:   z.string().max(32).optional(),
   visible:   z.boolean().optional(),
   known_ips: z.array(z.string().min(1).max(45)).optional(),
 });
