@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.1] — Per-Build-Label im signierten Offset-Blob
+
+### Added
+
+- **`label` im signierten Payload.** `buildBlob` nimmt jetzt optional das Per-Build-`label`
+  (z.B. „build 146") in den signierten Offset-Blob auf; `signOneBuild` reicht `build.label`
+  durch und der Sign-all-Pfad selektiert die Spalte mit. Reine Anzeige auf Bot-Seite (in
+  Variant Diagnostics als „Label:"-Zeile). Wird bei leerem Label weggelassen, damit
+  label-lose Blobs ihre exakte Byte-Form (und Signatur) behalten. Damit das Label beim Bot
+  erscheint, muss der Build **neu signiert** werden.
+
 ## [0.16.0] — Offsets → signiertes Panel (Templates, per-Build-Tier, Name-Channel, Push-Refetch)
 
 Fasst die Offset→Panel-Migration seit 0.15.0 zu einem Release zusammen: Engine.dll-Offsets

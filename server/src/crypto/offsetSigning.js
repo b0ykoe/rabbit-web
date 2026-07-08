@@ -177,7 +177,7 @@ export async function signPayload(payloadBytes, password, encPrivateKey) {
  * @param {string} encPrivateKey
  * @returns {Promise<{ payload_b64: string, signature_b64: string }>}
  */
-export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, password, encPrivateKey) {
+export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, password, encPrivateKey, label) {
   const payloadObj = {
     v: 1,
     server_id: serverId,
@@ -186,6 +186,10 @@ export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, pass
     fields: fieldsObj,
     names: namesObj || {},
   };
+  // Optional human label (the per-build label). Signed like everything else; the
+  // bot treats it as DISPLAY-ONLY. Omitted when empty so label-less blobs keep
+  // their exact prior byte shape (and signature).
+  if (typeof label === 'string' && label.length > 0) payloadObj.label = label;
   const payloadBytes = Buffer.from(JSON.stringify(payloadObj), 'utf8');
   const sig = await signPayload(payloadBytes, password, encPrivateKey);
   return {

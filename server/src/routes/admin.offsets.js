@@ -1108,7 +1108,9 @@ async function signOneBuild(server, serverId, build, password, encPrivateKey) {
 
   const stamp = Number(build.stamp);
   const size  = Number(build.size);
-  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey);
+  // Carry the build's human label into the signed payload so the bot can display
+  // which build/profile is applied (display-only; per-build blobs only).
+  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey, build.label);
 
   const now = nowSec();
   await db('server_builds').where('id', build.id).update({
@@ -1173,7 +1175,7 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
   }
 
   const builds = await db('server_builds').where('server_id', serverId)
-    .select('id', 'stamp', 'size');
+    .select('id', 'stamp', 'size', 'label');   // label → signed payload (display-only)
 
   // Whether the server-level blob (038) can also be re-signed: only when the
   // server carries a fingerprint (stamp/size). The server-level effective set is
