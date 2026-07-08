@@ -365,9 +365,13 @@ export const offsetsPutSchema = z.object({
   // Which build template this server forks (Phase 1). null clears it; omit to leave
   // unchanged. A missing value on a field falls back to the template's base value.
   offset_template_id: z.coerce.number().int().positive().nullable().optional(),
+  // value = numeric override (data|va slots). value_text = OPTIONAL string override
+  // for a kind:"name" slot (a mangled Engine.dll export name, P5). Optional so a
+  // numeric-only payload validates unchanged.
   overrides: z.array(z.object({
     field_name: z.string().min(1).max(64),
-    value:      z.coerce.number().int(),
+    value:      z.coerce.number().int().optional(),
+    value_text: z.string().max(255).optional(),
   })).max(600),
 });
 
@@ -426,9 +430,13 @@ export const buildUpdateSchema = z.object({
 // are plain integers (an offset can be negative). Capped at 600 like the general
 // PUT (the whole GameLayout is well under that).
 export const buildOverridesPutSchema = z.object({
+  // value = numeric per-build override. value_text = OPTIONAL string override for a
+  // kind:"name" slot (mangled Engine.dll export name, P5). Optional so a
+  // numeric-only payload validates unchanged.
   overrides: z.array(z.object({
     field_name: z.string().min(1).max(64),
-    value:      z.coerce.number().int(),
+    value:      z.coerce.number().int().optional(),
+    value_text: z.string().max(255).optional(),
   })).max(600),
 });
 

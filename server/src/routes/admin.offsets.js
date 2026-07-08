@@ -154,8 +154,9 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
   // `value` (active variant), so accept those aliases too — base_value is the
   // Stock EP4 baseline, preferring base_default over the active value.
   const now = nowSec();
-  const byName = new Map();          // field_name -> catalog row (name/kind/crit/base)
-  const activeByName = new Map();    // field_name -> ACTIVE value (running variant)
+  const byName = new Map();          // field_name -> catalog row (name/kind/crit/base[/base_text])
+  const activeByName = new Map();    // field_name -> ACTIVE value (running variant, numeric)
+  const activeTextByName = new Map();// field_name -> ACTIVE mangled name (running variant, name slots)
   for (const e of entries) {
     if (!e || typeof e !== 'object') continue;
     const rawName = (typeof e.field_name === 'string' && e.field_name) ? e.field_name
@@ -163,12 +164,43 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
     const fieldName = rawName.trim();
     if (fieldName.length < 1 || fieldName.length > 64) continue;
     const kind = typeof e.kind === 'string' ? e.kind.trim().toLowerCase() : '';
-    if (kind !== 'data' && kind !== 'va') continue;
+    if (kind !== 'data' && kind !== 'va' && kind !== 'name') continue;
 
     let criticality = null;
     if (e.criticality != null) {
       const c = String(e.criticality).trim();
       if (c) criticality = c.slice(0, 16);
+    }
+
+    if (kind === 'name') {
+      // NAME slot (P5, STRING dimension): the Stock base is a mangled Engine.dll
+      // export name string, not a number. base_value stays null; base_text holds
+      // the string (explicit base_text, else the exporter's base_default /
+      // name_default, else a string `value`). Cap the stored string at 255.
+      const rawBaseText =
+        (typeof e.base_text === 'string' && e.base_text) ? e.base_text
+        : (typeof e.base_default === 'string' && e.base_default) ? e.base_default
+        : (typeof e.name_default === 'string' && e.name_default) ? e.name_default
+        : (typeof e.value === 'string' && e.value) ? e.value
+        : null;
+      const baseText = rawBaseText != null ? String(rawBaseText).slice(0, 255) : null;
+
+      // ACTIVE mangled name on the exporting machine (running variant, e.g.
+      // Nemesis) — used below to auto-derive that server's name override = slots
+      // whose active string differs from the Stock base. Falls back to the base.
+      const rawActiveText = (typeof e.value === 'string' && e.value) ? e.value : rawBaseText;
+      if (rawActiveText != null) activeTextByName.set(fieldName, String(rawActiveText).slice(0, 255));
+
+      byName.set(fieldName, {
+        field_name: fieldName,
+        kind,
+        criticality,
+        base_value: null,
+        base_text:  baseText,
+        updated_at: now,
+      });
+      if (byName.size >= CATALOG_CAP) break;
+      continue;
     }
 
     // Stock baseline for this field: explicit base_value, else the exporter's
@@ -196,6 +228,7 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
       kind,
       criticality,
       base_value: baseValue,
+      base_text:  null,
       updated_at: now,
     });
     if (byName.size >= CATALOG_CAP) break;
@@ -239,9 +272,15 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
       templateId = id;
     }
     await trx('template_field_values').where('template_id', templateId).del();
+    // Numeric slots seed value=base_value; NAME slots (P5) seed value_text=base_text
+    // (parallel). A template row exists for a slot that has EITHER a numeric base OR
+    // a base name string. `value` is NOT NULL in the schema, so a name-only row
+    // stores value=0 as a placeholder (its string lives in value_text).
     const tplRows = rows
-      .filter(r => r.base_value != null)
-      .map(r => ({ template_id: templateId, field_name: r.field_name, value: r.base_value }));
+      .filter(r => r.base_value != null || (r.kind === 'name' && r.base_text != null))
+      .map(r => (r.kind === 'name'
+        ? { template_id: templateId, field_name: r.field_name, value: 0, value_text: r.base_text }
+        : { template_id: templateId, field_name: r.field_name, value: r.base_value, value_text: null }));
     if (tplRows.length) await trx('template_field_values').insert(tplRows);
 
     // 3) Auto-derive the exporting server's overrides = fields whose ACTIVE value
@@ -252,10 +291,20 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
       if (srv) {
         const overrideRows = [];
         for (const r of rows) {
+          if (r.kind === 'name') {
+            // NAME slot (P5): auto-derive the string override = slots whose ACTIVE
+            // mangled name differs from the Stock base_text. value is NOT NULL in
+            // the schema, so store value=0 as a placeholder — the string lives in
+            // value_text (parallel to the numeric value auto-derive below).
+            const at = activeTextByName.get(r.field_name);
+            if (at == null || at === r.base_text) continue;   // no delta
+            overrideRows.push({ server_id: targetServerId, field_name: r.field_name, value: 0, value_text: at, updated_at: now });
+            continue;
+          }
           if (r.base_value == null) continue;
           const av = activeByName.get(r.field_name);
           if (av == null || av === r.base_value) continue;   // no delta
-          overrideRows.push({ server_id: targetServerId, field_name: r.field_name, value: av, updated_at: now });
+          overrideRows.push({ server_id: targetServerId, field_name: r.field_name, value: av, value_text: null, updated_at: now });
         }
         // Also stamp the server's Engine.dll FINGERPRINT from the export (the bot
         // records the stamp/size of the binary it read), so the admin doesn't have
@@ -307,14 +356,17 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
   const templateId = server.offset_template_id != null ? Number(server.offset_template_id) : null;
 
   const [catalogRows, overrideRows, templateValueRows, templateList] = await Promise.all([
+    // Numeric override editor only — name-slots (kind='name') are managed via the
+    // catalog import + auto-derive, not the per-field numeric table (P5).
     db('offset_field_catalog')
-      .select('field_name', 'kind', 'criticality', 'base_value')
+      .whereNot('kind', 'name')
+      .select('field_name', 'kind', 'criticality', 'base_value', 'base_text')
       .orderBy('field_name', 'asc'),
     db('server_offset_overrides')
       .where('server_id', serverId)
-      .select('field_name', 'value'),
+      .select('field_name', 'value', 'value_text'),
     templateId != null
-      ? db('template_field_values').where('template_id', templateId).select('field_name', 'value')
+      ? db('template_field_values').where('template_id', templateId).select('field_name', 'value', 'value_text')
       : Promise.resolve([]),
     db('build_templates').select('id', 'name').orderBy('name', 'asc'),
   ]);
@@ -325,19 +377,35 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
 
   const overrideByName = new Map(overrideRows.map(r => [r.field_name, num(r.value)]));
   const templateByName = new Map(templateValueRows.map(r => [r.field_name, num(r.value)]));
+  // STRING dimension (P5) — parallel maps of effective mangled names. value_text is
+  // NULL for numeric slots, so these only carry name-slot strings.
+  const overrideTextByName = new Map(overrideRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
+  const templateTextByName = new Map(templateValueRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
 
   // Base for a field = the server's template value, else the catalog's compiled
-  // fallback (base_value). Effective = the override, else the base.
+  // fallback (base_value). Effective = the override, else the base. NAME slots (P5)
+  // carry a parallel `text` (base name = template.value_text ?? catalog.base_text)
+  // alongside numeric `base_value` (which is null for a name slot).
   const catalog = catalogRows.map(r => {
     const base = templateByName.has(r.field_name) ? templateByName.get(r.field_name) : num(r.base_value);
-    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base };
+    const text = r.kind === 'name'
+      ? (templateTextByName.has(r.field_name) ? templateTextByName.get(r.field_name) : (r.base_text ?? null))
+      : null;
+    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base, text };
   });
   const overrides = catalog
-    .filter(c => overrideByName.has(c.field_name))
-    .map(c => ({ field_name: c.field_name, value: overrideByName.get(c.field_name) }));
+    .filter(c => overrideByName.has(c.field_name) || overrideTextByName.has(c.field_name))
+    .map(c => ({
+      field_name: c.field_name,
+      value:      overrideByName.has(c.field_name) ? overrideByName.get(c.field_name) : null,
+      text:       c.kind === 'name' && overrideTextByName.has(c.field_name) ? overrideTextByName.get(c.field_name) : null,
+    }));
   const effective = catalog.map(c => ({
     field_name: c.field_name,
     base_value: c.base_value,
+    text:       c.kind === 'name'
+      ? (overrideTextByName.has(c.field_name) ? overrideTextByName.get(c.field_name) : c.text)
+      : null,
     override:   overrideByName.has(c.field_name) ? overrideByName.get(c.field_name) : null,
   }));
 
@@ -414,14 +482,17 @@ router.put('/servers/:id/offsets', requireSuperAdmin, validate(offsetsPutSchema)
     patch.offset_signed_at   = null;
     await trx('game_servers').where('id', serverId).update(patch);
 
-    // REPLACE-ALL the overrides for this server.
+    // REPLACE-ALL the overrides for this server. value = numeric override (0
+    // placeholder when only a name override is supplied — `value` is NOT NULL);
+    // value_text = the mangled name override for a kind:"name" slot (P5), else null.
     await trx('server_offset_overrides').where('server_id', serverId).del();
     if (overrides.length) {
       await trx('server_offset_overrides').insert(
         overrides.map(o => ({
           server_id:  serverId,
           field_name: o.field_name,
-          value:      o.value,
+          value:      o.value != null ? o.value : 0,
+          value_text: o.value_text != null ? o.value_text : null,
           updated_at: now,
         })),
       );
@@ -476,18 +547,22 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   // compiled value). BIGINT values arrive as strings from mysql2.
   const [templateValueRows, overrideRows] = await Promise.all([
     server.offset_template_id != null
-      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).whereNull('value_text').select('field_name', 'value')
       : Promise.resolve([]),
-    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+    db('server_offset_overrides').where('server_id', serverId).whereNull('value_text').select('field_name', 'value'),
   ]);
   const fields = {};
   for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
   for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
   const fieldCount = Object.keys(fields).length;
 
+  // STRING dimension (P5): the effective mangled export names for this server
+  // (no build → server-level). ALWAYS present in the blob ({} when none).
+  const names = await effectiveNames(serverId);
+
   let blob;
   try {
-    blob = await buildBlob(serverId, stamp, size, fields, password, keyRow.enc_private_key);
+    blob = await buildBlob(serverId, stamp, size, fields, names, password, keyRow.enc_private_key);
   } catch (err) {
     if (err instanceof OffsetKeyAuthError) {
       return res.status(403).json({ error: 'wrong signing password' });
@@ -530,9 +605,9 @@ router.get('/servers/:id/offset-dev-file', requireSuperAdmin, async (req, res) =
   // BIGINT values arrive as strings from mysql2.
   const [templateValueRows, overrideRows] = await Promise.all([
     server.offset_template_id != null
-      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).whereNull('value_text').select('field_name', 'value')
       : Promise.resolve([]),
-    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+    db('server_offset_overrides').where('server_id', serverId).whereNull('value_text').select('field_name', 'value'),
   ]);
   const fields = {};
   for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
@@ -578,8 +653,9 @@ router.get('/offset-templates/:id', requireSuperAdmin, async (req, res) => {
   const tpl = await db('build_templates').where('id', id).first();
   if (!tpl) return res.status(404).json({ error: 'Template not found' });
   const [catalogRows, valueRows] = await Promise.all([
-    db('offset_field_catalog').select('field_name', 'kind', 'criticality').orderBy('field_name', 'asc'),
-    db('template_field_values').where('template_id', id).select('field_name', 'value'),
+    // Numeric editor only — name-slots (kind='name') carry strings, not offsets.
+    db('offset_field_catalog').whereNot('kind', 'name').select('field_name', 'kind', 'criticality').orderBy('field_name', 'asc'),
+    db('template_field_values').where('template_id', id).whereNull('value_text').select('field_name', 'value'),
   ]);
   const num = (v) => (v == null ? null : Number(v));
   const valByName = new Map(valueRows.map(r => [r.field_name, num(r.value)]));
@@ -713,14 +789,51 @@ router.put('/offset-templates/:id/values', requireSuperAdmin, validate(templateV
 async function generalEffectiveFields(server, serverId) {
   const [templateValueRows, overrideRows] = await Promise.all([
     server.offset_template_id != null
-      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).select('field_name', 'value')
+      ? db('template_field_values').where('template_id', Number(server.offset_template_id)).whereNull('value_text').select('field_name', 'value')
       : Promise.resolve([]),
-    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value'),
+    db('server_offset_overrides').where('server_id', serverId).whereNull('value_text').select('field_name', 'value'),
   ]);
   const fields = {};
   for (const r of templateValueRows) fields[r.field_name] = Number(r.value);   // base
   for (const r of overrideRows)      fields[r.field_name] = Number(r.value);   // override wins
   return fields;
+}
+
+// Build the STRING dimension (P5) — the effective mangled Engine.dll export names
+// for a server (and optionally a build). For every kind:"name" catalog slot the
+// effective name = build.value_text ?? general.value_text ?? template.value_text ??
+// catalog.base_text (slots with no effective name are SKIPPED — they never enter
+// the signed `names`). Precedence mirrors generalEffectiveFields exactly, one layer
+// per table. Pass a buildId to fold that build's per-build name override on top;
+// omit it for the server-level blob. Returns { [slot]: mangledName }.
+async function effectiveNames(serverId, buildId) {
+  const server = await db('game_servers').where('id', serverId).select('offset_template_id').first();
+  const templateId = server && server.offset_template_id != null ? Number(server.offset_template_id) : null;
+
+  const [catalogRows, templateRows, generalRows, buildRows] = await Promise.all([
+    db('offset_field_catalog').where('kind', 'name').select('field_name', 'base_text'),
+    templateId != null
+      ? db('template_field_values').where('template_id', templateId).select('field_name', 'value_text')
+      : Promise.resolve([]),
+    db('server_offset_overrides').where('server_id', serverId).select('field_name', 'value_text'),
+    buildId != null
+      ? db('server_build_overrides').where('server_build_id', buildId).select('field_name', 'value_text')
+      : Promise.resolve([]),
+  ]);
+
+  const templateByName = new Map(templateRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
+  const generalByName  = new Map(generalRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
+  const buildByName    = new Map(buildRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
+
+  const names = {};
+  for (const r of catalogRows) {
+    const eff = buildByName.has(r.field_name)    ? buildByName.get(r.field_name)
+      : generalByName.has(r.field_name)          ? generalByName.get(r.field_name)
+      : templateByName.has(r.field_name)         ? templateByName.get(r.field_name)
+      : (r.base_text != null ? r.base_text : null);
+    if (eff != null) names[r.field_name] = eff;   // skip slots with no effective name
+  }
+  return names;
 }
 
 // ── GET /servers/:id/builds ──────────────────────────────────────────────────
@@ -850,31 +963,48 @@ router.get('/servers/:id/builds/:bid/offsets', requireSuperAdmin, async (req, re
   const build = await db('server_builds').where({ id: buildId, server_id: serverId }).first();
   if (!build) return res.status(404).json({ error: 'Build not found' });
 
-  const [catalogRows, buildOverrideRows, general] = await Promise.all([
+  const [catalogRows, buildOverrideRows, general, generalNames] = await Promise.all([
+    // Numeric per-build editor only — name-slots managed via catalog import (P5).
     db('offset_field_catalog')
-      .select('field_name', 'kind', 'criticality', 'base_value')
+      .whereNot('kind', 'name')
+      .select('field_name', 'kind', 'criticality', 'base_value', 'base_text')
       .orderBy('field_name', 'asc'),
-    db('server_build_overrides').where('server_build_id', buildId).select('field_name', 'value'),
+    db('server_build_overrides').where('server_build_id', buildId).whereNull('value_text').select('field_name', 'value', 'value_text'),
     generalEffectiveFields(server, serverId),
+    effectiveNames(serverId),   // GENERAL effective names (inherited by this build)
   ]);
 
   const num = (v) => (v == null ? null : Number(v));
   const buildByName = new Map(buildOverrideRows.map(r => [r.field_name, num(r.value)]));
+  // STRING dimension (P5) — this build's per-build name overrides (value_text only).
+  const buildTextByName = new Map(buildOverrideRows.filter(r => r.value_text != null).map(r => [r.field_name, r.value_text]));
 
   // BASE for a field = the GENERAL effective value (template base ± server general
   // override — the inherited value this build sits on top of), else the catalog's
-  // compiled fallback. OVERRIDE = the per-build value, else null.
+  // compiled fallback. OVERRIDE = the per-build value, else null. NAME slots (P5)
+  // carry a parallel `text` (base name = the GENERAL effective name this build
+  // inherits) alongside numeric `base_value` (null for a name slot).
   const catalog = catalogRows.map(r => {
     const base = Object.prototype.hasOwnProperty.call(general, r.field_name)
       ? general[r.field_name] : num(r.base_value);
-    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base };
+    const text = r.kind === 'name'
+      ? (Object.prototype.hasOwnProperty.call(generalNames, r.field_name) ? generalNames[r.field_name] : null)
+      : null;
+    return { field_name: r.field_name, kind: r.kind, criticality: r.criticality, base_value: base, text };
   });
   const overrides = catalog
-    .filter(c => buildByName.has(c.field_name))
-    .map(c => ({ field_name: c.field_name, value: buildByName.get(c.field_name) }));
+    .filter(c => buildByName.has(c.field_name) || buildTextByName.has(c.field_name))
+    .map(c => ({
+      field_name: c.field_name,
+      value:      buildByName.has(c.field_name) ? buildByName.get(c.field_name) : null,
+      text:       c.kind === 'name' && buildTextByName.has(c.field_name) ? buildTextByName.get(c.field_name) : null,
+    }));
   const effective = catalog.map(c => ({
     field_name: c.field_name,
     base_value: c.base_value,
+    text:       c.kind === 'name'
+      ? (buildTextByName.has(c.field_name) ? buildTextByName.get(c.field_name) : c.text)
+      : null,
     override:   buildByName.has(c.field_name) ? buildByName.get(c.field_name) : null,
   }));
 
@@ -936,14 +1066,17 @@ router.put('/servers/:id/builds/:bid/offsets', requireSuperAdmin, validate(build
     await trx('server_builds').where('id', buildId).update({
       signed_blob: null, signed_at: null, updated_at: now,
     });
-    // REPLACE-ALL the per-build overrides.
+    // REPLACE-ALL the per-build overrides. value = numeric override (0 placeholder
+    // when only a name override is supplied — `value` is NOT NULL); value_text =
+    // the mangled name override for a kind:"name" slot (P5), else null.
     await trx('server_build_overrides').where('server_build_id', buildId).del();
     if (overrides.length) {
       await trx('server_build_overrides').insert(
         overrides.map(o => ({
           server_build_id: buildId,
           field_name:      o.field_name,
-          value:           o.value,
+          value:           o.value != null ? o.value : 0,
+          value_text:      o.value_text != null ? o.value_text : null,
           updated_at:      now,
         })),
       );
@@ -965,13 +1098,17 @@ router.put('/servers/:id/builds/:bid/offsets', requireSuperAdmin, validate(build
 async function signOneBuild(server, serverId, build, password, encPrivateKey) {
   const general = await generalEffectiveFields(server, serverId);
   const buildOverrideRows = await db('server_build_overrides')
-    .where('server_build_id', build.id).select('field_name', 'value');
+    .where('server_build_id', build.id).whereNull('value_text').select('field_name', 'value');
   const fields = { ...general };                                   // template base + general
   for (const r of buildOverrideRows) fields[r.field_name] = Number(r.value);   // per-build wins
 
+  // STRING dimension (P5): effective mangled names folding this build's per-build
+  // name overrides on top of the general/template/catalog chain. ALWAYS present.
+  const names = await effectiveNames(serverId, build.id);
+
   const stamp = Number(build.stamp);
   const size  = Number(build.size);
-  const blob = await buildBlob(serverId, stamp, size, fields, password, encPrivateKey);
+  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey);
 
   const now = nowSec();
   await db('server_builds').where('id', build.id).update({
@@ -1057,9 +1194,10 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
     // POST /servers/:id/offsets/sign.
     if (hasServerFingerprint) {
       const fields = await generalEffectiveFields(server, serverId);
+      const names  = await effectiveNames(serverId);   // server-level string dimension (P5)
       const blob = await buildBlob(
         serverId, Number(server.engine_time_date_stamp), Number(server.engine_size_of_image),
-        fields, password, keyRow.enc_private_key,
+        fields, names, password, keyRow.enc_private_key,
       );
       await db('game_servers').where('id', serverId).update({
         offset_signed_blob: JSON.stringify(blob), offset_signed_at: now,

@@ -22,9 +22,12 @@
  * BLOB FORMAT (what the bot verifies in Phase E — kept dead simple, NO
  * canonicalization needed)
  *   { payload_b64, signature_b64 }
- *     payload      = utf8 bytes of JSON.stringify({ v, server_id, stamp, size, fields })
+ *     payload      = utf8 bytes of JSON.stringify({ v, server_id, stamp, size, fields, names })
  *                    v = integer schema version (1) — forward-compat so later phases
  *                    can add sections without a flag-day; older bots ignore it.
+ *                    `names` (P5) is the STRING dimension — mangled Engine.dll export
+ *                    names — parallel to numeric `fields`; ALWAYS present ({} when
+ *                    none). Old bots ignore the extra key.
  *     payload_b64  = base64(payload)
  *     signature_b64= base64( Ed25519_sign(payload) )   // signed over THOSE EXACT bytes
  *   The bot base64-decodes payload_b64, verifies the signature over the raw
@@ -157,25 +160,31 @@ export async function signPayload(payloadBytes, password, encPrivateKey) {
 
 /**
  * Build the signed blob object the bot verifies.
- * payload = JSON.stringify({ v, server_id, stamp, size, fields }) utf8 bytes; the
- * signature is over THOSE EXACT bytes (no canonicalization anywhere). `v` is an
+ * payload = JSON.stringify({ v, server_id, stamp, size, fields, names }) utf8 bytes;
+ * the signature is over THOSE EXACT bytes (no canonicalization anywhere). `v` is an
  * integer schema version (1) placed FIRST for forward-compat — later phases can
  * add sections without a flag-day, and the currently-deployed bot ignores it.
+ * `names` (P5) is the STRING dimension (mangled Engine.dll export names) placed
+ * AFTER `fields`; it is ALWAYS present ({} when the caller passes nothing) and old
+ * bots ignore it. The `names` param is optional so the signature stays
+ * backward-usable by callers that only sign numeric fields.
  * @param {number} serverId
  * @param {number|string} stamp - engine TimeDateStamp
  * @param {number|string} size  - engine SizeOfImage
  * @param {Object<string, number>} fieldsObj - { field_name: int, ... }
+ * @param {Object<string, string>} [namesObj] - { logical_slot: mangled_name, ... }
  * @param {string} password
  * @param {string} encPrivateKey
  * @returns {Promise<{ payload_b64: string, signature_b64: string }>}
  */
-export async function buildBlob(serverId, stamp, size, fieldsObj, password, encPrivateKey) {
+export async function buildBlob(serverId, stamp, size, fieldsObj, namesObj, password, encPrivateKey) {
   const payloadObj = {
     v: 1,
     server_id: serverId,
     stamp,
     size,
     fields: fieldsObj,
+    names: namesObj || {},
   };
   const payloadBytes = Buffer.from(JSON.stringify(payloadObj), 'utf8');
   const sig = await signPayload(payloadBytes, password, encPrivateKey);
