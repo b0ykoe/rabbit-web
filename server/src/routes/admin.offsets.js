@@ -129,8 +129,15 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
   let parsed;
   try { parsed = JSON.parse(text); }
   catch { return res.status(400).json({ error: 'File is not valid JSON' }); }
-  if (!Array.isArray(parsed)) {
-    return res.status(400).json({ error: 'Expected a JSON array of field-catalog entries' });
+
+  // Accept EITHER a bare array of catalog entries OR the shape the bot's Dev >
+  // Exporter tab actually writes: an object { kind:"rabbit-offsets", fields:[…] }.
+  // (offsets_catalog.json is an object; a hand-authored list may be a bare array.)
+  const entries = Array.isArray(parsed) ? parsed
+    : (parsed && typeof parsed === 'object' && Array.isArray(parsed.fields)) ? parsed.fields
+    : null;
+  if (!entries) {
+    return res.status(400).json({ error: 'Expected the bot\'s offsets_catalog.json (or a JSON array of field entries)' });
   }
 
   // Cap the catalog so a hostile upload can't drive an unbounded write (the whole
@@ -140,11 +147,16 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
   // Validate + normalize. kind ∈ {data,va}; field_name 1..64; criticality ≤16 or
   // null; base_value an integer or null. Bad rows dropped. Later duplicate
   // field_names overwrite earlier ones (last-wins) so the map stays PK-clean.
+  // The bot exporter keys each field as `name` + `base_default` (Stock EP4) /
+  // `value` (active variant), so accept those aliases too — base_value is the
+  // Stock EP4 baseline, preferring base_default over the active value.
   const now = nowSec();
   const byName = new Map();
-  for (const e of parsed) {
+  for (const e of entries) {
     if (!e || typeof e !== 'object') continue;
-    const fieldName = typeof e.field_name === 'string' ? e.field_name.trim() : '';
+    const rawName = (typeof e.field_name === 'string' && e.field_name) ? e.field_name
+      : (typeof e.name === 'string' ? e.name : '');
+    const fieldName = rawName.trim();
     if (fieldName.length < 1 || fieldName.length > 64) continue;
     const kind = typeof e.kind === 'string' ? e.kind.trim().toLowerCase() : '';
     if (kind !== 'data' && kind !== 'va') continue;
@@ -155,9 +167,14 @@ router.post('/offset-catalog/import', requireSuperAdmin, catalogUploadSingle, as
       if (c) criticality = c.slice(0, 16);
     }
 
+    // Stock EP4 baseline: explicit base_value, else the exporter's base_default,
+    // else the active `value` as a last resort.
+    const rawBase = e.base_value != null ? e.base_value
+      : e.base_default != null ? e.base_default
+      : e.value;
     let baseValue = null;
-    if (e.base_value != null) {
-      const bv = Number(e.base_value);
+    if (rawBase != null) {
+      const bv = Number(rawBase);
       if (Number.isInteger(bv)) baseValue = bv;
     }
 
