@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Box, Typography, Breadcrumbs, Link, IconButton, Tooltip, Alert,
+  Box, Stack, Typography, Breadcrumbs, Link, IconButton, Tooltip, Alert,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { Link as RouterLink } from 'react-router-dom';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import OffsetKeyCatalogPanel from './OffsetKeyCatalogPanel.jsx';
+import TemplatesSection from './TemplatesSection.jsx';
 
 // Portal-wide "Offset signing" page (super_admin). The signing key + the field
 // catalog are SHARED across every server (one key signs them all), so they live
@@ -17,6 +18,7 @@ export default function OffsetSigningPage() {
   const navigate = useNavigate();
   const { showSnackbar } = useSnackbar();
   const [keyState, setKeyState] = useState(null);   // { exists, public_key_hex } | null
+  const [tplNonce, setTplNonce] = useState(0);      // bump to reload the templates list
 
   const reloadKey = useCallback(async () => {
     try { setKeyState(await adminApi.getOffsetKey()); }
@@ -57,11 +59,26 @@ export default function OffsetSigningPage() {
         catalog exported from the bot's Dev &gt; Exporter tab.
       </Alert>
 
-      <OffsetKeyCatalogPanel
-        keyState={keyState}
-        onKeyChanged={reloadKey}
-        onCatalogChanged={() => showSnackbar('Field catalog imported')}
-      />
+      <Stack spacing={2.5}>
+        <OffsetKeyCatalogPanel
+          keyState={keyState}
+          onKeyChanged={reloadKey}
+          onCatalogChanged={(result) => {
+            // The import upserts a build template (+ maybe derives a server's
+            // overrides). Reload the list + surface what happened.
+            setTplNonce((n) => n + 1);
+            if (result?.applied_server_id) {
+              showSnackbar(
+                `Imported ${result.count} fields → template "${result.template_name}", ` +
+                `plus ${result.override_count} override(s) auto-set on server #${result.applied_server_id}.`,
+              );
+            } else {
+              showSnackbar(`Imported ${result?.count ?? 0} fields → template "${result?.template_name ?? 'Stock EP4'}".`);
+            }
+          }}
+        />
+        <TemplatesSection reloadNonce={tplNonce} />
+      </Stack>
     </Box>
   );
 }

@@ -163,6 +163,14 @@ export const adminApi = {
   getServerOffsets:    (id)         => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`),
   putServerOffsets:    (id, body)   => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
   signServerOffsets:   (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
+
+  // Build templates (Phase 1) — named per-edition base value-sets a server forks.
+  getOffsetTemplates:      ()          => apiFetch('/api/admin/world/offset-templates'),
+  getOffsetTemplate:       (id)        => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`),
+  createOffsetTemplate:    (body)      => apiFetch('/api/admin/world/offset-templates', { method: 'POST', body: JSON.stringify(body) }),
+  updateOffsetTemplate:    (id, body)  => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteOffsetTemplate:    (id)        => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  putOffsetTemplateValues: (id, values) => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}/values`, { method: 'PUT', body: JSON.stringify({ values }) }),
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────

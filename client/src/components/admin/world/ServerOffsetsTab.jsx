@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
-  Box, Stack, Paper, Typography, TextField, Button, Chip, Alert, Skeleton, Tooltip, Link,
+  Box, Stack, Paper, Typography, TextField, MenuItem, Button, Chip, Alert, Skeleton, Tooltip, Link,
 } from '@mui/material';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
@@ -68,6 +68,9 @@ export default function ServerOffsetsTab({ server }) {
   // Override working copy: field_name -> rawString ('' = no override).
   const [overrides, setOverrides] = useState({});
 
+  // Which build template this server forks (its Base column comes from it).
+  const [templateId, setTemplateId] = useState(null);
+
   // Tracks whether the working copy diverges from the last-loaded server state.
   const [dirty, setDirty] = useState(false);
 
@@ -85,6 +88,7 @@ export default function ServerOffsetsTab({ server }) {
       map[o.field_name] = '0x' + (Number(o.value) >>> 0).toString(16);
     }
     setOverrides(map);
+    setTemplateId(payload?.template_id ?? null);
     setDirty(false);
   }, []);
 
@@ -157,7 +161,7 @@ export default function ServerOffsetsTab({ server }) {
       if (!p.ok || p.value == null) continue; // guarded by anyInvalid, belt-and-braces
       outOverrides.push({ field_name, value: p.value });
     }
-    const body = { overrides: outOverrides };
+    const body = { overrides: outOverrides, offset_template_id: templateId ?? null };
     if (stampParsed.value != null) body.stamp = stampParsed.value;
     if (sizeParsed.value != null)  body.size  = sizeParsed.value;
 
@@ -244,6 +248,32 @@ export default function ServerOffsetsTab({ server }) {
         </Paper>
       ) : (
         <>
+          {/* (a2) Base template — the server forks this; its values fill the Base
+              column. Overrides are this server's deltas on top. */}
+          <Section
+            title="Base template"
+            caption="This server forks a build template (its base offset values). Your overrides below are the deltas on top. Templates are created by importing on the Offset signing page."
+          >
+            <TextField
+              select
+              label="Base template"
+              size="small"
+              value={templateId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTemplateId(v === '' ? null : Number(v));
+                setDirty(true);
+              }}
+              sx={{ minWidth: 260 }}
+              helperText={(data?.templates || []).length ? undefined : 'No templates yet — import one on the Offset signing page.'}
+            >
+              <MenuItem value=""><em>None (compiled fallback)</em></MenuItem>
+              {(data?.templates || []).map((t) => (
+                <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+              ))}
+            </TextField>
+          </Section>
+
           {/* (b) Engine fingerprint. */}
           <Section
             title="Engine fingerprint"

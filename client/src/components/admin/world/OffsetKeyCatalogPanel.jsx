@@ -75,8 +75,9 @@ export default function OffsetKeyCatalogPanel({ keyState, onKeyChanged, onCatalo
     setImporting(true);
     try {
       const res = await adminApi.importOffsetCatalog(file);
-      showSnackbar(`Imported ${res?.count ?? 0} fields`);
-      onCatalogChanged?.();
+      // Parent (OffsetSigningPage) shows the result snackbar (it knows about the
+      // derived template + server overrides in the response) and reloads the list.
+      onCatalogChanged?.(res);
     } catch (err) {
       showSnackbar(err?.data?.error || err?.message || 'Catalog import failed', 'error');
     } finally {
