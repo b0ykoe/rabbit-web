@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.16.5] — Offsets: „veraltet — neu signieren"-Erkennung
+
+### Added
+
+- **Stale-Badge pro Build + für die Server-Base.** Das Panel prüft, ob der *gespeicherte*
+  signierte Blob noch dem *aktuellen effektiven Satz* entspricht, und zeigt sonst
+  **„Out of date — re-sign"** (Warnfarbe + Tooltip) statt „Signed …". Fängt geänderte Overrides,
+  Label, Template **und** Payload-Format-Änderungen ab (z.B. das erst mit 0.16.1 dazugekommene
+  `label`) — genau die Fälle, in denen ein Blob still veraltet ohne Hinweis.
+
+### Changed
+
+- Signieren + Stale-Check laufen jetzt durch **dieselben** Content-Helper
+  (`buildEffectiveContent` / `baseEffectiveContent`), damit der „neu signieren?"-Hinweis nie vom
+  tatsächlichen Sign-Ergebnis abweicht. `GET /offsets` + `GET /builds` liefern nun `stale`.
+
 ## [0.16.4] — Offsets-Seite: „Engine fingerprint"-Sektion entfernt
 
 ### Removed

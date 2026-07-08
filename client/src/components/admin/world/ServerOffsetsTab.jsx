@@ -187,8 +187,9 @@ export default function ServerOffsetsTab({ server }) {
   };
 
   // ── Signed status ──────────────────────────────────────────────────────────
-  // signed:false OR any unsaved edit ⇒ "needs signing".
-  const signed = !!data?.signed && !dirty;
+  // Green only when signed, saved, AND the stored blob still matches the current
+  // effective set (backend `stale`). Unsigned / unsaved edits / out-of-date ⇒ re-sign.
+  const signed = !!data?.signed && !dirty && !data?.stale;
   const signedAt = data?.signed_at ?? null;
 
   const signedChip = useMemo(() => {
@@ -203,7 +204,7 @@ export default function ServerOffsetsTab({ server }) {
     }
     const label = dirty
       ? 'Unsaved edits — needs signing'
-      : (data?.signed ? 'Stale — needs signing' : 'Not signed');
+      : (data?.stale ? 'Out of date — re-sign' : 'Not signed');
     return <Chip size="small" color="default" variant="outlined" label={label} sx={{ height: 24 }} />;
   }, [signed, signedAt, dirty, data]);
 

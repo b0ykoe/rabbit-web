@@ -459,11 +459,21 @@ export default function BuildsSection({ serverId, serverName }) {
                   </TableCell>
                   <TableCell>
                     {b.signed ? (
-                      <Chip
-                        size="small" color="success" variant="filled"
-                        label={`Signed ${fmtRelative(b.signed_at)}`}
-                        sx={{ height: 22 }}
-                      />
+                      b.stale ? (
+                        <Tooltip title="The signed blob no longer matches this build's current effective set (overrides/label/template changed) — re-sign to apply.">
+                          <Chip
+                            size="small" color="warning" variant="filled"
+                            label="Out of date — re-sign"
+                            sx={{ height: 22 }}
+                          />
+                        </Tooltip>
+                      ) : (
+                        <Chip
+                          size="small" color="success" variant="filled"
+                          label={`Signed ${fmtRelative(b.signed_at)}`}
+                          sx={{ height: 22 }}
+                        />
+                      )
                     ) : (
                       <Chip size="small" color="default" variant="outlined" label="Not signed" sx={{ height: 22 }} />
                     )}

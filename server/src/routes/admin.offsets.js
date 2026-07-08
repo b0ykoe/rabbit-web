@@ -409,6 +409,13 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
     override:   overrideByName.has(c.field_name) ? overrideByName.get(c.field_name) : null,
   }));
 
+  // Is the stored server-level base blob OUT OF DATE vs the current effective set?
+  // (overrides/label/template changed, or it predates a payload-format change) → the
+  // admin must re-sign. Only meaningful once signed.
+  const baseStale = server.offset_signed_blob
+    ? signedBlobStale(server.offset_signed_blob, await baseEffectiveContent(server, serverId))
+    : false;
+
   res.json({
     fingerprint: {
       stamp: num(server.engine_time_date_stamp),
@@ -421,6 +428,7 @@ router.get('/servers/:id/offsets', requireSuperAdmin, async (req, res) => {
     effective,
     signed:    !!server.offset_signed_blob,
     signed_at: num(server.offset_signed_at),
+    stale:     baseStale,
   });
 });
 
@@ -536,26 +544,17 @@ router.post('/servers/:id/offsets/sign', requireSuperAdmin, validate(offsetSignS
   // server), so the fingerprint is OPTIONAL — it's only the reference build stamped
   // into the payload for the bot's diagnostics. Default 0 when unset; the bot ignores
   // stamp/size for a base blob. (Per-build blobs keep their exact-stamp gate.)
-  const stamp = server.engine_time_date_stamp == null ? 0 : Number(server.engine_time_date_stamp);
-  const size  = server.engine_size_of_image  == null ? 0 : Number(server.engine_size_of_image);
-
-  // The server-level BASE blob carries the effective DATA offsets = template base
-  // MERGED WITH overrides (override wins), with kind='va' STRIPPED (baseEffectiveFields)
-  // — because this blob is IDENTITY-gated on the bot and must not carry per-build VAs.
-  // Names are safe (GetProcAddress by string is build-independent + fail-safe), so
-  // they ride along. Fields the panel doesn't manage are absent → the bot keeps its
-  // compiled value.
-  const fields = await baseEffectiveFields(server, serverId);
-  const fieldCount = Object.keys(fields).length;
-
-  // STRING dimension (P5): the effective mangled export names for this server
-  // (no build → server-level). ALWAYS present in the blob ({} when none).
-  const names = await effectiveNames(serverId);
+  // The server-level BASE content: effective DATA offsets (kind='va' STRIPPED — this
+  // blob is IDENTITY-gated on the bot and must not carry per-build VAs) + names
+  // (GetProcAddress-by-string, build-independent + fail-safe). Fingerprint is optional
+  // (reference only). Same content the staleness check uses, so they can't drift.
+  const c = await baseEffectiveContent(server, serverId);
+  const fieldCount = Object.keys(c.fields).length;
 
   let blob;
   try {
     // isBase=true → the bot applies this on server identity, not the exact fingerprint.
-    blob = await buildBlob(serverId, stamp, size, fields, names, password, keyRow.enc_private_key, null, true);
+    blob = await buildBlob(serverId, c.stamp, c.size, c.fields, c.names, password, keyRow.enc_private_key, null, true);
   } catch (err) {
     if (err instanceof OffsetKeyAuthError) {
       return res.status(403).json({ error: 'wrong signing password' });
@@ -805,6 +804,68 @@ async function baseEffectiveFields(server, serverId) {
   return fields;
 }
 
+// The effective PAYLOAD CONTENT ({stamp,size,fields,names,label,base}) a per-build
+// blob would be signed with — WITHOUT signing. signOneBuild + the staleness check
+// both go through this so the "needs re-sign?" signal can never drift from what a
+// real sign produces.
+async function buildEffectiveContent(server, serverId, build) {
+  const general = await generalEffectiveFields(server, serverId);   // template + general (VAs kept)
+  const buildOverrideRows = await db('server_build_overrides')
+    .where('server_build_id', build.id).whereNull('value_text').select('field_name', 'value');
+  const fields = { ...general };
+  for (const r of buildOverrideRows) fields[r.field_name] = Number(r.value);   // per-build wins
+  const names = await effectiveNames(serverId, build.id);
+  return {
+    stamp: Number(build.stamp), size: Number(build.size),
+    fields, names, label: build.label || '', base: false,
+  };
+}
+
+// The effective PAYLOAD CONTENT for the server-level identity-gated base (DATA only,
+// VAs stripped; fingerprint optional → 0). Used by the base sign paths + staleness.
+async function baseEffectiveContent(server, serverId) {
+  const fields = await baseEffectiveFields(server, serverId);
+  const names  = await effectiveNames(serverId);
+  return {
+    stamp: server.engine_time_date_stamp == null ? 0 : Number(server.engine_time_date_stamp),
+    size:  server.engine_size_of_image  == null ? 0 : Number(server.engine_size_of_image),
+    fields, names, label: '', base: true,
+  };
+}
+
+// True when a STORED signed blob no longer matches what a fresh sign would produce
+// (`content` from *EffectiveContent above) → the admin must re-sign. Compares the
+// meaningful payload dimensions (fields + names as maps, label, base flag), order-
+// independent. A null stored blob is "unsigned" (NOT stale — a distinct state). An
+// unparseable stored blob is treated as stale (re-sign to heal it).
+function signedBlobStale(storedText, content) {
+  if (storedText == null) return false;
+  let payload;
+  try {
+    const outer = JSON.parse(storedText);
+    payload = JSON.parse(Buffer.from(String(outer.payload_b64 || ''), 'base64').toString('utf8'));
+  } catch { return true; }
+  const mapsDiffer = (a, b) => {
+    a = a || {}; b = b || {};
+    const ak = Object.keys(a), bk = Object.keys(b);
+    if (ak.length !== bk.length) return true;
+    for (const k of ak) if (String(a[k]) !== String(b[k])) return true;
+    return false;
+  };
+  if (mapsDiffer(payload.fields, content.fields)) return true;
+  if (mapsDiffer(payload.names,  content.names))  return true;
+  if ((payload.label || '') !== (content.label || '')) return true;
+  if (!!payload.base !== !!content.base) return true;
+  // Per-build blobs are EXACT-stamp gated on the bot — a stamp/size change must count
+  // as stale (defense-in-depth: no route edits an existing build's stamp/size today).
+  // The base is identity-gated (stamp/size reference-only), so skip it there.
+  if (!content.base) {
+    if (Number(payload.stamp) !== Number(content.stamp)) return true;
+    if (Number(payload.size)  !== Number(content.size))  return true;
+  }
+  return false;
+}
+
 // Build the STRING dimension (P5) — the effective mangled Engine.dll export names
 // for a server (and optionally a build). For every kind:"name" catalog slot the
 // effective name = build.value_text ?? general.value_text ?? template.value_text ??
@@ -850,7 +911,9 @@ router.get('/servers/:id/builds', requireSuperAdmin, async (req, res) => {
   if (!Number.isFinite(serverId) || serverId < 0) {
     return res.status(400).json({ error: 'Bad server id' });
   }
-  const server = await db('game_servers').where('id', serverId).select('id').first();
+  // offset_template_id is needed to recompute each build's effective content for the
+  // staleness check (generalEffectiveFields reads it).
+  const server = await db('game_servers').where('id', serverId).select('id', 'offset_template_id').first();
   if (!server) return res.status(404).json({ error: 'Server not found' });
 
   const builds = await db('server_builds')
@@ -866,6 +929,17 @@ router.get('/servers/:id/builds', requireSuperAdmin, async (req, res) => {
   const cc = new Map(counts.map(r => [Number(r.server_build_id), Number(r.c)]));
   const num = (v) => (v == null ? null : Number(v));
 
+  // Staleness per SIGNED build: does the stored blob still match a fresh sign?
+  // (unsigned builds are skipped → not stale). Recomputed via the SAME content path
+  // signOneBuild uses, so the signal can't drift.
+  const staleById = new Map();
+  await Promise.all(
+    builds.filter(b => b.signed_blob != null).map(async (b) => {
+      const content = await buildEffectiveContent(server, serverId, b);
+      staleById.set(Number(b.id), signedBlobStale(b.signed_blob, content));
+    }),
+  );
+
   res.json(builds.map(b => ({
     id:             Number(b.id),
     stamp:          num(b.stamp),
@@ -874,6 +948,7 @@ router.get('/servers/:id/builds', requireSuperAdmin, async (req, res) => {
     override_count: cc.get(Number(b.id)) || 0,
     signed:         !!b.signed_blob,
     signed_at:      num(b.signed_at),
+    stale:          staleById.get(Number(b.id)) || false,
   })));
 });
 
@@ -1102,28 +1177,16 @@ router.put('/servers/:id/builds/:bid/offsets', requireSuperAdmin, validate(build
 // OffsetKeyAuthError on a wrong password (mapped to 403 by the caller). Returns the
 // field count. `server` + `keyRow` are read once by the caller and passed in.
 async function signOneBuild(server, serverId, build, password, encPrivateKey) {
-  const general = await generalEffectiveFields(server, serverId);
-  const buildOverrideRows = await db('server_build_overrides')
-    .where('server_build_id', build.id).whereNull('value_text').select('field_name', 'value');
-  const fields = { ...general };                                   // template base + general
-  for (const r of buildOverrideRows) fields[r.field_name] = Number(r.value);   // per-build wins
-
-  // STRING dimension (P5): effective mangled names folding this build's per-build
-  // name overrides on top of the general/template/catalog chain. ALWAYS present.
-  const names = await effectiveNames(serverId, build.id);
-
-  const stamp = Number(build.stamp);
-  const size  = Number(build.size);
-  // Carry the build's human label into the signed payload so the bot can display
-  // which build/profile is applied (display-only; per-build blobs only). isBase=false:
-  // a per-build blob keeps its VAs and stays EXACT-STAMP gated on the bot (unchanged).
-  const blob = await buildBlob(serverId, stamp, size, fields, names, password, encPrivateKey, build.label, false);
+  // Same effective content the staleness check uses (no drift). label rides in the
+  // payload (display-only); isBase=false keeps VAs + the exact-stamp gate on the bot.
+  const c = await buildEffectiveContent(server, serverId, build);
+  const blob = await buildBlob(serverId, c.stamp, c.size, c.fields, c.names, password, encPrivateKey, c.label, c.base);
 
   const now = nowSec();
   await db('server_builds').where('id', build.id).update({
     signed_blob: JSON.stringify(blob), signed_at: now, updated_at: now,
   });
-  return { fieldCount: Object.keys(fields).length, signed_at: now };
+  return { fieldCount: Object.keys(c.fields).length, signed_at: now };
 }
 
 // ── POST /servers/:id/builds/:bid/sign ───────────────────────────────────────
@@ -1196,13 +1259,9 @@ router.post('/servers/:id/builds/sign-all', requireSuperAdmin, validate(buildsSi
     // is optional (reference build only, default 0). Same merge + crypto as
     // POST /servers/:id/offsets/sign.
     {
-      const fields = await baseEffectiveFields(server, serverId);   // DATA only (VAs stripped)
-      const names  = await effectiveNames(serverId);   // server-level string dimension (P5)
-      const sStamp = server.engine_time_date_stamp == null ? 0 : Number(server.engine_time_date_stamp);
-      const sSize  = server.engine_size_of_image  == null ? 0 : Number(server.engine_size_of_image);
+      const c = await baseEffectiveContent(server, serverId);   // DATA only (VAs stripped)
       const blob = await buildBlob(
-        serverId, sStamp, sSize,
-        fields, names, password, keyRow.enc_private_key, null, true,   // isBase=true (identity-gated)
+        serverId, c.stamp, c.size, c.fields, c.names, password, keyRow.enc_private_key, null, true,
       );
       await db('game_servers').where('id', serverId).update({
         offset_signed_blob: JSON.stringify(blob), offset_signed_at: now,
