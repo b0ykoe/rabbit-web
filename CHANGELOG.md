@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.4] — Offsets-Seite: „Engine fingerprint"-Sektion entfernt
+
+### Removed
+
+- **Die „Engine fingerprint"-Sektion auf der Server-Offsets-Seite ist weg.** Die server-level
+  Base ist identitäts-gegatet (gilt per Server-Identität für *jeden* Build) — ein server-eigener
+  Fingerprint gehört dort nicht hin (0.16.3 hatte ihn nur entschärft; jetzt ganz raus).
+  Fingerprints leben ausschließlich auf den **Per-Build**-Overrides (ein Build = ein
+  Engine.dll-Stamp). Der server-eigene Fingerprint bleibt als interne Referenzspalte (vom
+  Katalog-Import gesetzt, fürs Signieren optional seit 0.16.3), wird aber nicht mehr angezeigt
+  oder editiert; der zugehörige Client-State/Validierung ist mit entfernt.
+
 ## [0.16.3] — Offsets-Seite: UX an die identitäts-gegatete Base angepasst
 
 ### Changed

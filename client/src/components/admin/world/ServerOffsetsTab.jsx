@@ -11,11 +11,6 @@ import BuildsSection from './BuildsSection.jsx';
 
 // ── Format helpers ────────────────────────────────────────────────────────────
 
-// Fixed-width fingerprint hex (0x%08X). Null → em dash.
-function toHex(n) {
-  return n == null ? '—' : '0x' + (n >>> 0).toString(16).toUpperCase().padStart(8, '0');
-}
-
 // Relative "time ago" from epoch seconds — matches the sibling tabs' clock copy.
 function fmtRelative(sec) {
   if (!sec) return 'never';
@@ -62,10 +57,6 @@ export default function ServerOffsetsTab({ server }) {
   const [error, setError]       = useState(null);
   const [notFound, setNotFound] = useState(false);
 
-  // Fingerprint working copy (raw strings; hex or decimal accepted).
-  const [stampStr, setStampStr] = useState('');
-  const [sizeStr, setSizeStr]   = useState('');
-
   // Override working copy: field_name -> rawString ('' = no override).
   const [overrides, setOverrides] = useState({});
 
@@ -81,10 +72,6 @@ export default function ServerOffsetsTab({ server }) {
 
   // Seed the working copies from a freshly-loaded payload.
   const seedFrom = useCallback((payload) => {
-    const stamp = payload?.fingerprint?.stamp ?? null;
-    const size  = payload?.fingerprint?.size ?? null;
-    setStampStr(stamp == null ? '' : toHex(stamp));
-    setSizeStr(size == null ? '' : toHex(size));
     const map = {};
     for (const o of (payload?.overrides || [])) {
       map[o.field_name] = '0x' + (Number(o.value) >>> 0).toString(16);
@@ -139,15 +126,8 @@ export default function ServerOffsetsTab({ server }) {
     setDirty(true);
   }, []);
 
-  const onStampChange = (v) => { setStampStr(v); setDirty(true); };
-  const onSizeChange  = (v) => { setSizeStr(v);  setDirty(true); };
-
   // ── Validation ─────────────────────────────────────────────────────────────
-  const stampParsed = parseIntFlexible(stampStr);
-  const sizeParsed  = parseIntFlexible(sizeStr);
-  const fpInvalid   = !stampParsed.ok || !sizeParsed.ok;
-  const overridesInvalid = hasInvalidOverride(overrides);
-  const anyInvalid  = fpInvalid || overridesInvalid;
+  const anyInvalid = hasInvalidOverride(overrides);
 
   const catalog   = data?.catalog || [];
   const effective = data?.effective || [];
@@ -164,8 +144,6 @@ export default function ServerOffsetsTab({ server }) {
       outOverrides.push({ field_name, value: p.value });
     }
     const body = { overrides: outOverrides, offset_template_id: templateId ?? null };
-    if (stampParsed.value != null) body.stamp = stampParsed.value;
-    if (sizeParsed.value != null)  body.size  = sizeParsed.value;
 
     setSaving(true);
     try {
@@ -270,8 +248,8 @@ export default function ServerOffsetsTab({ server }) {
             No offset set for this server yet
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Import the field catalog on the Offset signing page, then set the engine
-            fingerprint and any per-field overrides. Nothing is stored until you Save.
+            Import the field catalog on the Offset signing page, then set any per-field
+            overrides. Nothing is stored until you Save.
           </Typography>
         </Paper>
       ) : (
@@ -300,46 +278,6 @@ export default function ServerOffsetsTab({ server }) {
                 <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
               ))}
             </TextField>
-          </Section>
-
-          {/* (b) Engine fingerprint — now just the REFERENCE build for the identity-gated
-              base (the exact-match gate lives on per-build overrides below). */}
-          <Section
-            title="Engine fingerprint (reference build — optional)"
-            caption="The server base applies to a bot by SERVER IDENTITY — for ANY Engine.dll build of this server, no exact match required. This fingerprint is only the reference build the base is stamped against (shown in the bot's diagnostics); it's optional. The EXACT fingerprint gate lives on the per-build overrides below (one build = one Engine.dll stamp). Export a build's stamp from the bot's Dev > Exporter tab."
-          >
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                label="TimeDateStamp"
-                size="small"
-                value={stampStr}
-                error={!stampParsed.ok}
-                placeholder="0x00000000"
-                onChange={(e) => onStampChange(e.target.value)}
-                helperText={
-                  !stampParsed.ok
-                    ? 'Enter hex (0x…) or a decimal integer'
-                    : `Current: ${toHex(data?.fingerprint?.stamp ?? null)}`
-                }
-                inputProps={{ style: { fontFamily: 'monospace' }, spellCheck: false }}
-                sx={{ minWidth: 220 }}
-              />
-              <TextField
-                label="SizeOfImage"
-                size="small"
-                value={sizeStr}
-                error={!sizeParsed.ok}
-                placeholder="0x00000000"
-                onChange={(e) => onSizeChange(e.target.value)}
-                helperText={
-                  !sizeParsed.ok
-                    ? 'Enter hex (0x…) or a decimal integer'
-                    : `Current: ${toHex(data?.fingerprint?.size ?? null)}`
-                }
-                inputProps={{ style: { fontFamily: 'monospace' }, spellCheck: false }}
-                sx={{ minWidth: 220 }}
-              />
-            </Stack>
           </Section>
 
           {/* (c) Base-vs-override field editor. */}
@@ -403,7 +341,7 @@ export default function ServerOffsetsTab({ server }) {
             </Stack>
             {anyInvalid && (
               <Alert severity="warning" sx={{ mt: 2, py: 0.5 }}>
-                Fix the highlighted {fpInvalid ? 'fingerprint' : 'override'} value(s) before saving.
+                Fix the highlighted override value(s) before saving.
               </Alert>
             )}
           </Paper>
