@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Box, Stack, Paper, Typography, Button, Chip, IconButton, Tooltip, Skeleton, Alert,
+  Box, Stack, Paper, Typography, Button, Chip, IconButton, Tooltip, Skeleton, Alert, Link,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions, TextField,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import LayersIcon from '@mui/icons-material/Layers';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
+import TemplateEditorDialog from './TemplateEditorDialog.jsx';
 
 const errMsg = (err, fallback) => err?.data?.error || err?.message || fallback;
 
@@ -26,6 +28,7 @@ export default function TemplatesSection({ reloadNonce }) {
   const [saving, setSaving]   = useState(false);
   const [delTarget, setDelTarget] = useState(null);   // row pending delete
   const [deleting, setDeleting]   = useState(false);
+  const [editTarget, setEditTarget] = useState(null); // row open in the editor
 
   const load = useCallback(async () => {
     setError(null);
@@ -106,7 +109,18 @@ export default function TemplatesSection({ reloadNonce }) {
             <TableBody>
               {rows.map((t) => (
                 <TableRow key={t.id} hover>
-                  <TableCell sx={{ fontWeight: 600 }}>{t.name}</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>
+                    <Link
+                      component="button"
+                      type="button"
+                      underline="hover"
+                      color="inherit"
+                      onClick={() => setEditTarget(t)}
+                      sx={{ fontWeight: 600, textAlign: 'left' }}
+                    >
+                      {t.name}
+                    </Link>
+                  </TableCell>
                   <TableCell align="right">
                     <Chip size="small" variant="outlined" label={t.field_count} sx={{ height: 20 }} />
                   </TableCell>
@@ -121,6 +135,11 @@ export default function TemplatesSection({ reloadNonce }) {
                   </TableCell>
                   <TableCell sx={{ color: 'text.secondary', fontSize: '0.8rem' }}>{t.notes || '—'}</TableCell>
                   <TableCell align="right">
+                    <Tooltip title="Edit values">
+                      <IconButton size="small" onClick={() => setEditTarget(t)}>
+                        <EditOutlinedIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                     <Tooltip title={t.servers_using ? 'In use — deleting unlinks those servers' : 'Delete template'}>
                       <IconButton size="small" onClick={() => setDelTarget(t)}>
                         <DeleteOutlineIcon fontSize="small" />
@@ -175,6 +194,15 @@ export default function TemplatesSection({ reloadNonce }) {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Per-template value editor */}
+      <TemplateEditorDialog
+        open={!!editTarget}
+        onClose={() => setEditTarget(null)}
+        templateId={editTarget?.id}
+        templateName={editTarget?.name}
+        onSaved={load}
+      />
     </Paper>
   );
 }
