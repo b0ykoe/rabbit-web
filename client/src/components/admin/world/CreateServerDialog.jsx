@@ -8,10 +8,10 @@ import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import { useVariantOptions } from './useVariantOptions.js';
 import KnownIpsEditor from './KnownIpsEditor.jsx';
 
-// Legacy fallback variant labels. Variants are now MANAGED rows (see VariantsPage
-// + useVariantOptions); this const only survives as the offline fallback the hook
-// degrades to when the variants API is unreachable, so the picker is never empty.
-export const VARIANT_OPTIONS = ['EP4 Stock', 'Nemesis', 'Unknown'];
+// VARIANT_OPTIONS (the legacy offline-fallback trio) now lives in useVariantOptions
+// so this module doesn't form an import cycle with the hook. Re-exported from here
+// for backwards compatibility with any caller still importing it from this path.
+export { VARIANT_OPTIONS } from './useVariantOptions.js';
 
 // Sentinel Select value that reveals the free-text variant field. Variant is free
 // text on the server (VARCHAR 32); a custom value self-registers into game_variants

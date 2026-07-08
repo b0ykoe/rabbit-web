@@ -1,10 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { adminApi } from '../../../api/endpoints.js';
-import { VARIANT_OPTIONS } from './CreateServerDialog.jsx';
 
-// Legacy fallback set — the curated trio the picker shipped with before variants
-// were managed rows. Used verbatim when the variants API can't be reached so the
-// server create/edit forms are NEVER blocked by a variants-endpoint failure.
+// Legacy fallback variant labels — the curated trio the picker shipped with before
+// variants were managed rows. Owned HERE (the hook is the sole consumer) and
+// re-exported for the server forms, so this module does NOT import CreateServerDialog:
+// that back-edge formed a CreateServerDialog ↔ useVariantOptions import cycle, and a
+// bundle reorder evaluated this module first → "Cannot access 'VARIANT_OPTIONS'
+// before initialization" (TDZ) → blank page. Keep this one-directional.
+export const VARIANT_OPTIONS = ['EP4 Stock', 'Nemesis', 'Unknown'];
+
+// Used verbatim when the variants API can't be reached so the server create/edit
+// forms are NEVER blocked by a variants-endpoint failure.
 const FALLBACK_OPTIONS = VARIANT_OPTIONS.map((name) => ({ name, display_name: null }));
 
 // Data-driven variant picker options. Fetches the managed (non-archived) variant
