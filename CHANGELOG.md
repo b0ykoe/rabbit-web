@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.17.0] — Feature-Flag-Katalog mit globalem Kill-Switch
+
+### Added
+
+- **Migration 042 `feature_flag_catalog`** — datengetriebene Registry aller Feature-Flags
+  (key, Label, Gruppe, Shop-Kennzeichnung, Per-User-Default, `enabled_globally`, Sortierung).
+  Ein neues Flag ist ab jetzt **eine Katalog-Zeile + das Bot-Struct-Member** statt vier
+  handgepflegter Listen (Bot-Header, `bot.auth.js`, Migration 024, `UserFormDialog`).
+  Seed enthält auch `dev_training`/`dev_animator`, die in `ALL_FEATURES_TRUE` fehlten (Drift).
+- **Globaler Kill-Switch pro Flag** (`enabled_globally`). Effektiver Wert an den Bot:
+  `enabled_globally && (super_admin || per-User-Wert ?? Katalog-Default)`. Der Kill-Switch
+  schlägt **bewusst auch Super-Admins** — ein Feature lässt sich damit flottenweit stoppen,
+  ohne User-Zeilen anzufassen. Per-User-Grants bleiben gespeichert und greifen wieder,
+  sobald das Flag global reaktiviert wird.
+- **Neue Admin-API**: `GET /api/admin/feature-flags` (Katalog, für Admins) und
+  `PATCH /api/admin/feature-flags/:key` (`enabled_globally` / `default_value`,
+  Super-Admin, auditiert als `feature_flags.update`).
+- **Settings-Seite**: neues „Feature Flags"-Panel mit den globalen Schaltern
+  (gruppiert, Shop-Chips; nur Super-Admin kann schalten).
+
+### Changed
+
+- `POST /api/bot/login` und `POST /api/bot/auth/start` bauen die `feature_flags`-Antwort
+  jetzt katalog-getrieben (`services/featureFlags.js`); solange die Migration noch nicht
+  gelaufen ist, greift ein Legacy-Fallback mit dem alten Verhalten (kein Bruch im
+  Deploy-Fenster).
+- **`requireSpawnTracking`** (Spawn-Ingest/World-Routen) respektiert den globalen
+  Kill-Switch — global deaktiviertes `spawn_tracking` stoppt Uploads auch für
+  Super-Admins (Verhaltensänderung gegenüber dem bisherigen Role-Bypass).
+- **User-Editor** rendert die Flag-Checkboxen aus dem Katalog (Fetch beim Öffnen);
+  die hartkodierte Liste bleibt nur als Fallback. Global deaktivierte Flags werden
+  mit „(off globally)" markiert, bleiben aber per-User editierbar.
+
 ## [0.16.6] — Monster Map: zone-first, Standard Zone 0 + Zonen-/Aufzeichnungs-Filter
 
 ### Changed

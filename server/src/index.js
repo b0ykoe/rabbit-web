@@ -44,6 +44,7 @@ import portalResetHwidRoutes from './routes/portal.reset-hwid.js';
 import portalSessionsRoutes from './routes/portal.sessions.js';
 import portalWorldRoutes    from './routes/portal.world.js';
 import adminSettingsRoutes  from './routes/admin.settings.js';
+import adminFlagsRoutes     from './routes/admin.flags.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -151,6 +152,7 @@ app.use('/api/admin/sessions',  adminSessionsRoutes);
 app.use('/api/admin/audit',     adminAuditRoutes);
 app.use('/api/admin/statuses',  adminStatusesRoutes);
 app.use('/api/admin/settings',  adminSettingsRoutes);
+app.use('/api/admin/feature-flags', adminFlagsRoutes);
 app.use('/api/admin/world',     adminWorldRoutes);
 app.use('/api/admin/world',     adminOffsetsRoutes);
 

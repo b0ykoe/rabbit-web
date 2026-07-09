@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   TextField, Button, MenuItem, Alert, FormControl, InputLabel,
@@ -6,12 +6,15 @@ import {
   FormControlLabel, Switch, Typography,
 } from '@mui/material';
 import { useAuth } from '../../context/AuthContext.jsx';
+import { adminApi } from '../../api/endpoints.js';
 
 const CHANNELS = ['release', 'beta', 'alpha'];
 
-// Feature flag definitions — add new ones here and they appear in the UI
-// automatically. Keep in sync with Bot/inject/feature_flags.h — the bot's
-// FeatureFlags struct is the source of truth for which keys the DLL reads.
+// LEGACY fallback flag definitions — since migration 042 the rendered list
+// comes from the server-side feature_flag_catalog (GET /api/admin/
+// feature-flags); this hardcoded copy is used only when that fetch fails
+// (e.g. server not yet migrated). New flags need only a catalog row + the
+// bot struct member — NOT an entry here.
 const FEATURE_FLAG_GROUPS = [
   { label: 'User Features', flags: [
     { key: 'training',    label: 'Training' },
@@ -72,6 +75,39 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
   const [form, setForm]   = useState({ name: '', email: '', password: '', role: 'user', allowed_channels: ['release'], status: '', hwid_reset_enabled: true, feature_flags: { ...DEFAULT_FLAGS } });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Catalog-driven flag list (042). null until loaded; fetch failure keeps
+  // null → the hardcoded FEATURE_FLAG_GROUPS fallback renders instead.
+  const [catalog, setCatalog] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    adminApi.getFeatureFlagCatalog()
+      .then((res) => { if (alive && Array.isArray(res?.flags)) setCatalog(res.flags); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [open]);
+
+  // Render groups from the catalog when available; legacy list otherwise.
+  // `enabled_globally: false` flags stay editable per-user (the stored value
+  // is preserved) but are marked — the kill-switch beats everything at
+  // evaluation time, so the checkbox has no effect until it's re-enabled.
+  const flagGroups = useMemo(() => {
+    if (!catalog) {
+      return FEATURE_FLAG_GROUPS.map(g => ({
+        label: g.label,
+        flags: g.flags.map(f => ({ ...f, enabled_globally: true })),
+      }));
+    }
+    const byGroup = new Map();
+    for (const f of catalog) {
+      if (!byGroup.has(f.group_label)) byGroup.set(f.group_label, []);
+      byGroup.get(f.group_label).push({
+        key: f.flag_key, label: f.label, enabled_globally: f.enabled_globally,
+      });
+    }
+    return [...byGroup.entries()].map(([label, flags]) => ({ label, flags }));
+  }, [catalog]);
 
   useEffect(() => {
     if (user) {
@@ -180,8 +216,8 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
             label="Allow HWID Reset"
           />
 
-          {/* Feature Flags */}
-          {FEATURE_FLAG_GROUPS.map((group) => (
+          {/* Feature Flags — catalog-driven (042), legacy fallback list otherwise */}
+          {flagGroups.map((group) => (
             <Box key={group.label}>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 {group.label}
@@ -189,10 +225,11 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
               <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0, ml: -1 }}>
                 {group.flags.map((flag) => {
                   const disabled = flag.key.startsWith('dev_') && flag.key !== 'dev' && !form.feature_flags?.dev;
+                  const killed = flag.enabled_globally === false;
                   return (
                     <FormControlLabel
                       key={flag.key}
-                      sx={{ minWidth: 130 }}
+                      sx={{ minWidth: 130, opacity: killed ? 0.55 : 1 }}
                       control={
                         <Checkbox
                           size="small"
@@ -210,7 +247,16 @@ export default function UserFormDialog({ open, onClose, onSubmit, user = null })
                           }}
                         />
                       }
-                      label={<Typography variant="body2">{flag.label}</Typography>}
+                      label={
+                        <Typography variant="body2">
+                          {flag.label}
+                          {killed && (
+                            <Typography component="span" variant="caption" color="warning.main" sx={{ ml: 0.5 }}>
+                              (off globally)
+                            </Typography>
+                          )}
+                        </Typography>
+                      }
                     />
                   );
                 })}

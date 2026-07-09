@@ -69,6 +69,10 @@ export const adminApi = {
   getSettings:    ()           => apiFetch('/api/admin/settings'),
   updateSetting:  (key, data)  => apiFetch(`/api/admin/settings/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
+  // Feature-flag catalog (042) — data-driven flag registry + global kill-switches
+  getFeatureFlagCatalog: ()          => apiFetch('/api/admin/feature-flags'),
+  updateFeatureFlag:     (key, data) => apiFetch(`/api/admin/feature-flags/${key}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
   // Monster-map game variants (super-admin) — Phase C: variants are managed rows
   // (the join key stays the free-text `name` string the bot emits). List returns
   // non-archived by default with server_count per row; create 409s on dup name;

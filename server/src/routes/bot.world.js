@@ -30,6 +30,7 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import db from '../db.js';
 import { validateSpawnIngest } from '../middleware/spawnIngest.js';
+import { flagEnabledFor } from '../services/featureFlags.js';
 import {
   validate, spawnIngestSchema,
   sessionStartSchema, sessionStopSchema,
@@ -80,19 +81,11 @@ async function resolveUserId(req) {
   return null;
 }
 
-// Gate: super_admin bypass OR feature_flags.spawn_tracking [D1]. A naive
-// feature_flags.spawn_tracking check would deny super-admins (their stored
-// flags may be null / ALL_FEATURES_TRUE is synthetic).
-function loadUserAndGate(user) {
-  if (!user) return false;
-  if (user.role === 'super_admin') return true;
-  let flags = {};
-  if (user.feature_flags) {
-    try { flags = JSON.parse(user.feature_flags); } catch { flags = {}; }
-  }
-  return !!flags.spawn_tracking;
-}
-
+// Gate: catalog-driven effective spawn_tracking (042) — super_admin bypasses
+// the per-user value, but the flag's GLOBAL kill-switch (feature_flag_catalog
+// .enabled_globally) beats everyone, so uploads can be stopped fleet-wide
+// from the admin Settings page. Falls back to the pre-042 semantics
+// (super_admin || stored spawn_tracking) while the catalog table is absent.
 async function requireSpawnTracking(req, res) {
   const userId = await resolveUserId(req);
   if (!userId) {
@@ -101,7 +94,7 @@ async function requireSpawnTracking(req, res) {
   }
   const user = await db('users').where('id', userId)
     .select('id', 'role', 'feature_flags').first();
-  if (!loadUserAndGate(user)) {
+  if (!user || !(await flagEnabledFor(user, 'spawn_tracking'))) {
     res.status(403).json({ error: 'spawn_tracking not enabled' });
     return null;
   }

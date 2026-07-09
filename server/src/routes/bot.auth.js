@@ -8,28 +8,11 @@ import { validateBotUserToken, validateBotToken } from '../middleware/botToken.j
 import { recordAudit } from '../services/auditLog.js';
 import { botHeartbeatSessionLimiter } from '../middleware/rateLimiter.js';
 import { validate, botLoginSchema, botAuthStartSchema, botHeartbeatSchema } from '../validation/schemas.js';
-
-// Full feature-flag map used when the user is a super-admin — every key
-// the bot understands set to `true`. Source of truth is still the bot
-// struct in Bot/inject/feature_flags.h; keep this in sync if new flags
-// are added there.
-const ALL_FEATURES_TRUE = Object.freeze({
-  // User features
-  training: true, skills: true, monsters: true, statistics: true,
-  combo: true, options: true, hwid_spoof: true,
-  inventory: true, buffs: true, consumables: true,
-  // Dev master + per-module
-  dev: true, dev_movement: true, dev_entities: true, dev_drops: true,
-  dev_skills: true, dev_advanced: true, dev_blacklist: true,
-  dev_obstacles: true, dev_npc: true, dev_combo: true,
-  dev_terrain: true, dev_debug: true, dev_chat: true,
-  dev_inventory: true, dev_buffs: true, dev_anticheat: true,
-  dev_packets: true,
-  // Monster-map / spawn-tracking (PLAN_v2 §3.8, [C5]). Added here so the
-  // super-admin bypass grants it too — the ingest gate is
-  // `role==='super_admin' || feature_flags.spawn_tracking`.
-  spawn_tracking: true,
-});
+// Feature flags are catalog-driven since migration 042: effective value =
+// enabled_globally && (super_admin || per-user value ?? catalog default).
+// The old hardcoded ALL_FEATURES_TRUE map lives on only as the service's
+// legacy fallback for the pre-migrate deploy window.
+import { effectiveFlagsFor } from '../services/featureFlags.js';
 
 const router = Router();
 
@@ -91,11 +74,11 @@ router.post('/login', validate(botLoginSchema), async (req, res) => {
   const licenses = await loadUserLicenses(user.id);
 
   const isSuperAdmin = user.role === 'super_admin';
-  // Super-admins see every feature; plain users/admins see what their
-  // feature_flags JSON says. `options` is always on regardless.
-  const featureFlags = isSuperAdmin
-    ? { ...ALL_FEATURES_TRUE }
-    : (user.feature_flags ? JSON.parse(user.feature_flags) : {});
+  // Catalog-driven effective flags (042): super-admins see every feature
+  // unless a flag's global kill-switch is off; plain users/admins get
+  // their per-user value with catalog defaults filling gaps. `options`
+  // is always on bot-side regardless.
+  const featureFlags = await effectiveFlagsFor(user);
 
   res.json({
     user_token: userToken,
@@ -248,11 +231,9 @@ router.post('/start', validate(botAuthStartSchema), async (req, res) => {
 
   const token = await signToken(payload, config.bot.ed25519PrivateKey);
 
-  // Feature flags — super-admin sees everything; everyone else gets
-  // their persisted per-user JSON.
-  const featureFlags = isSuperAdmin
-    ? { ...ALL_FEATURES_TRUE }
-    : (user?.feature_flags ? JSON.parse(user.feature_flags) : {});
+  // Feature flags — catalog-driven effective map (042); null user (license
+  // without an owner) gets an empty map, as before.
+  const featureFlags = await effectiveFlagsFor(user);
 
   res.json({ token, feature_flags: featureFlags });
 });
