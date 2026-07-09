@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.17.1] — Share-Landing-Page mit echter Vorschau
+
+### Changed
+
+- **`/share/:id` zeigt jetzt eine richtige Vorschau** statt nur der Copy-URL:
+  Share-Name als Titel, Meta-Chips (Erstellungsdatum, Quell-Server aus dem
+  `sourceServer`-Stempel, Tab-Anzahl), Inhaltstabelle mit freundlichen
+  Tab-Labels + Settings-Anzahl pro Tab, und bei enthaltenen Plänen eine
+  eigene Tabelle mit **Name, Schrittzahl und Loop-Flag**. Bewusst NICHT
+  gezeigt: echte Konfigurationswerte — keine Koordinaten, keine
+  Step-Inhalte, keine Item-/Skill-IDs (die vollständige Vorschau bleibt im
+  authentifizierten Bot-Import).
+- Die Tab-Label-Map spiegelt `exportable_tabs.h` des Bots, ist aber
+  **tolerant**: unbekannte Namespaces rendern als Rohname, damit Shares
+  neuerer Bot-Versionen weiterhin eine Vorschau bekommen.
+
+### Fixed
+
+- **Deaktivierte Shares liefern jetzt 404.** Bisher prüfte die Landing-Page
+  nur die Existenz der Zeile — der „Deactivate"-Button im Bot versprach
+  eine 404, die öffentliche Seite renderte aber weiter.
+
 ## [0.17.0] — Feature-Flag-Katalog mit globalem Kill-Switch
 
 ### Added
