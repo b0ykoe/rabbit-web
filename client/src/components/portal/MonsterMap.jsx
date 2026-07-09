@@ -183,6 +183,24 @@ export function MonsterMapView({
     return [...set].sort((a, b) => a - b);
   }, [zonesProvided, zoneList, selectedMobs, mobZonesById]);
 
+  // ── Full zone list (user path — zone-first) ────────────────────────────────
+  // Every zone that has data, independent of the mob selection: the integer keys of
+  // the browse index' zoneNames map, sorted ascending. Drives the user-path zone
+  // dropdown and the default-zone effect so a zone is selectable/preselected before
+  // any mob is checked. The admin embed keeps its explicit prop-derived `zones`.
+  const fullZoneList = useMemo(() => {
+    if (zonesProvided) return zones;
+    return Object.keys(zoneNames)
+      .map((z) => parseInt(z, 10))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+  }, [zonesProvided, zones, zoneNames]);
+
+  // The zone <TextField select> option list: the explicit prop zones for the admin
+  // embed, else the full data-zone list. (fullZoneList already resolves this, kept
+  // as a named alias so the dropdown reads by intent.)
+  const zoneOptions = fullZoneList;
+
   // Zone display names: prefer the bot-exported names map, then the explicit
   // zoneList name (admin embed passes real names), then "Zone N".
   const zoneListNameById = useMemo(() => {
@@ -210,6 +228,14 @@ export function MonsterMapView({
   // and the auto-fit framing. OFF by default so nothing is hidden implicitly.
   const [hideSeenOnce, setHideSeenOnce] = useState(false);
   const RELIABILITY_MIN = 0.15;             // small threshold below which a spot is "unreliable"
+
+  // Zone-first mob-checklist filters (user path only). Both default ON so the list
+  // starts scoped to the selected zone's actually-recorded monsters.
+  //  • zoneMobsOnly     → show only mobs whose recorded zone list includes the zone.
+  //  • recordedMobsOnly → show only mobs that have (reliable) cells in the loaded
+  //                       (zone, version) payload.
+  const [zoneMobsOnly, setZoneMobsOnly]         = useState(true);
+  const [recordedMobsOnly, setRecordedMobsOnly] = useState(true);
 
   // Mobile-only: the mob checklist collapses to save vertical space. Default open
   // when nothing is selected yet; auto-collapse once a mob is picked so the map
@@ -264,14 +290,16 @@ export function MonsterMapView({
     setNavConsumed(true);
   }, [deepLinkActive, navConsumed, navState, loadingServers]);
 
-  // Once zones for the focus mob include the pending (deep-linked) zone, force it.
+  // Once the full zone list includes the pending (deep-linked) zone, force it. The
+  // zone list is now mob-independent, so a deep-link resolves as soon as the index
+  // has loaded — even before its highlighted mob(s) are reflected in any union.
   useEffect(() => {
     if (!pendingZone) return;
-    if (zones.includes(parseInt(pendingZone, 10))) {
+    if (fullZoneList.includes(parseInt(pendingZone, 10))) {
       setZoneNo(pendingZone);
       setPendingZone('');
     }
-  }, [pendingZone, zones]);
+  }, [pendingZone, fullZoneList]);
 
   // ── Whole-server browse index (loaded ONCE per server) ─────────────────────
   // /zone-index returns the mob catalog (with real names folded in) + the zones
@@ -370,16 +398,54 @@ export function MonsterMapView({
     return v ? `version #${version} · ${fmtDate(v.ver_start_sec)}` : `version #${version}`;
   }, [asOfDate, version, versionList]);
 
+  // ── Recorded-mob set for the CURRENT (zone, version) payload ────────────────
+  // The mob_ids that actually have cells in the loaded bulk payload, keeping only
+  // those with at least one "reliable" cell (hits>1 OR reliability>=RELIABILITY_MIN)
+  // — consistent with the hideSeenOnce gate. Pure client-side over the cached cells;
+  // toggling never refetches. Drives the "Show only recorded monsters" filter.
+  const presentMobIds = useMemo(() => {
+    const set = new Set();
+    for (const c of cellsAll) {
+      if (c?.mob_id == null) continue;
+      const reliable = (c.hits ?? 0) > 1 || (c.reliability ?? 0) >= RELIABILITY_MIN;
+      if (reliable) set.add(c.mob_id);
+    }
+    return set;
+  }, [cellsAll]);
+
+  // ── Visible mob set (the two zone-first toggles) ───────────────────────────
+  // The checklist / effective-set membership after applying, in the user path:
+  //  • zoneMobsOnly     → mob's recorded zones (mobZonesById) include the selected zone.
+  //  • recordedMobsOnly → mob has a reliable cell in the loaded (zone, version) payload.
+  // The admin embed leaves the list unfiltered (both toggles are user-only UI). With
+  // no zone selected yet nothing is scoped, so the filters no-op until a zone exists.
+  const visibleMobIds = useMemo(() => {
+    if (zonesProvided) return null;            // admin path: no zone-first filtering
+    const zoneInt = parseInt(zoneNo, 10);
+    const haveZone = Number.isFinite(zoneInt);
+    const set = new Set();
+    for (const m of idxMobs) {
+      const id = m?.mob_id;
+      if (id == null) continue;
+      if (zoneMobsOnly && haveZone && !(mobZonesById.get(id) || []).includes(zoneInt)) continue;
+      if (recordedMobsOnly && haveZone && !presentMobIds.has(id)) continue;
+      set.add(id);
+    }
+    return set;
+  }, [zonesProvided, zoneNo, idxMobs, zoneMobsOnly, recordedMobsOnly, mobZonesById, presentMobIds]);
+
   // ── Client-side mob filtering (checklist + search) ─────────────────────────
   // The search box filters the cached index by name substring or numeric mob_id —
-  // no request per keystroke. Selected mobs float to the top so the current pick
-  // stays visible while searching. Mirrors the old server-side ORDER BY roughly.
+  // no request per keystroke. The two zone-first toggles further scope the list to
+  // the selected zone's (recorded) monsters (user path). Selected mobs float to the
+  // top so the current pick stays visible while searching.
   const filteredMobs = useMemo(() => {
     const q = mobQuery.trim().toLowerCase();
     const asId = /^\d+$/.test(q) ? parseInt(q, 10) : null;
     let list = idxMobs;
+    if (visibleMobIds) list = list.filter((m) => visibleMobIds.has(m.mob_id));
     if (q) {
-      list = idxMobs.filter((m) =>
+      list = list.filter((m) =>
         (m.name && m.name.toLowerCase().includes(q)) || m.mob_id === asId);
     }
     return [...list].sort((a, b) => {
@@ -388,7 +454,21 @@ export function MonsterMapView({
       if (sa !== sb) return sa - sb;
       return (a.name || '').localeCompare(b.name || '');
     });
-  }, [idxMobs, mobQuery, selectedMobs]);
+  }, [idxMobs, mobQuery, selectedMobs, visibleMobIds]);
+
+  // ── Effective mob set (drives the map, clusters, counts, auto-fit) ─────────
+  // Zone-first default content: with no explicit selection the map shows ALL
+  // currently-visible (filtered) mobs; once the user checks specific mobs it narrows
+  // to (selectedMobs ∩ visible). A stale selected mob outside the visible set simply
+  // contributes nothing. The admin path (visibleMobIds === null) falls back to the
+  // raw selection exactly as before.
+  const effectiveMobIds = useMemo(() => {
+    if (!visibleMobIds) return selectedMobs;      // admin path: unchanged
+    if (selectedMobs.size === 0) return visibleMobIds;
+    const set = new Set();
+    for (const id of selectedMobs) if (visibleMobIds.has(id)) set.add(id);
+    return set;
+  }, [visibleMobIds, selectedMobs]);
 
   // Reset downstream selections whenever the server changes (manual pick).
   const onServerChange = (id) => {
@@ -423,21 +503,22 @@ export function MonsterMapView({
     setMobListOpen(selectedMobs.size === 0);
   }, [isMobile, selectedMobs.size]);
 
-  // ── Keep zoneNo valid against the derived zone options ─────────────────────
-  // In the user path the zone options are the union of the selected mobs' zones[]
-  // (from the index). When that set changes, keep the current pick if it's still
-  // valid; otherwise default to the first zone (or clear when none remain). Never
-  // clobber a deep-link's pending zone — that effect forces the target once it
-  // appears in the derived set. The admin path (zonesProvided) is left to its
-  // initialZone / manual pick logic.
+  // ── Default / keep zoneNo valid against the FULL zone list (user path) ──────
+  // Zone-first: the user-path zone options are every data zone (fullZoneList), not
+  // the mob union. Once the index has loaded we keep a still-valid current pick;
+  // otherwise preselect zone 0 when present, else the lowest zone — even with zero
+  // mobs selected. Never clobber a deep-link's pending zone (that effect forces the
+  // target once it appears). The admin path (zonesProvided) keeps its initialZone /
+  // manual pick logic untouched.
   useEffect(() => {
     if (zonesProvided) return;
     if (pendingZone) return;
     setZoneNo((prev) => {
-      if (prev && zones.includes(parseInt(prev, 10))) return prev;
-      return zones.length ? String(zones[0]) : '';
+      if (prev && fullZoneList.includes(parseInt(prev, 10))) return prev;
+      if (!fullZoneList.length) return '';
+      return String(fullZoneList.includes(0) ? 0 : fullZoneList[0]);
     });
-  }, [zonesProvided, zones, pendingZone]);
+  }, [zonesProvided, fullZoneList, pendingZone]);
 
   // ── Preselect an initial zone (admin embed) ────────────────────────────────
   // When an explicit zone list is provided and an initialZone is given, select it
@@ -505,9 +586,9 @@ export function MonsterMapView({
   // wrapped as a single-cell "cluster" so the existing frame/renderer/highlight
   // (which expect center_x/z + min/max + density_score) serve the per-cell heat.
   const clusters = useMemo(() => {
-    if (selectedMobs.size === 0) return [];
+    if (effectiveMobIds.size === 0) return [];
     return cellsAll
-      .filter((c) => selectedMobs.has(c.mob_id))
+      .filter((c) => effectiveMobIds.has(c.mob_id))
       .map((c) => ({
         mob_id: c.mob_id,
         cells: 1,
@@ -519,7 +600,7 @@ export function MonsterMapView({
         y_avg: c.y, x: c.x, z: c.z,
         last_seen_sec: c.last_seen_sec,
       }));
-  }, [cellsAll, selectedMobs]);
+  }, [cellsAll, effectiveMobIds]);
 
   // When the (server, zone) target changes, re-arm the background layer: assume it
   // may exist and let <image onError> decide, and restore the default-ON toggle.
@@ -786,8 +867,9 @@ export function MonsterMapView({
     <Box>
       <Typography variant="h6" fontWeight={600} sx={{ mb: 0.5 }}>Monster Map</Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Where monsters spawn, by server and zone. Pick a server and one or more mobs to
-        plot their spawn spots — hotter colours mean higher density.
+        {zonesProvided
+          ? 'Where monsters spawn, by server and zone. Pick a server and one or more mobs to plot their spawn spots — hotter colours mean higher density.'
+          : 'Where monsters spawn, by server and zone. Pick a server and a zone to see its monsters — check specific mobs to narrow the plot. Hotter colours mean higher density.'}
       </Typography>
 
       {topError && <Alert severity="error" sx={{ mb: 2 }}>{topError}</Alert>}
@@ -819,17 +901,20 @@ export function MonsterMapView({
           </Grid>
         )}
         <Grid item xs={12} sm={showServerPicker ? 4 : 8}>
+          {/* Zone-first (user path): the dropdown lists EVERY data zone (fullZoneList)
+              and is usable immediately on load — no mob selection required. The admin
+              embed keeps its explicit prop-derived `zones`. */}
           <TextField
             select fullWidth size="small" label="Zone"
             value={zoneNo} onChange={(e) => setZoneNo(e.target.value)}
-            disabled={!zones.length}
+            disabled={!zoneOptions.length}
             helperText={
-              !zonesProvided && selectedMobs.size === 0
-                ? 'Select a mob'
-                : (loadingIndex && !zones.length ? 'Loading…' : (zones.length ? '' : 'No zones'))
+              loadingIndex && !zoneOptions.length
+                ? 'Loading…'
+                : (zoneOptions.length ? '' : 'No zones')
             }
           >
-            {zones.map((z) => (
+            {zoneOptions.map((z) => (
               <MenuItem key={z} value={String(z)}>{zoneLabel(z)}</MenuItem>
             ))}
           </TextField>
@@ -957,10 +1042,49 @@ export function MonsterMapView({
             )}
 
             {!serverId && emptyHint('Pick a server to begin.')}
-            {serverId && selectedMobs.size === 0 && !(allowBareZone && zoneNo) && emptyHint('Select one or more mobs from the list.')}
-            {serverId && selectedMobs.size > 0 && !zoneNo && !loadingIndex && emptyHint('No zone data for the selected mob(s).')}
-            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && !allowBareZone && emptyHint('No spawns for this selection.')}
-            {serverId && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length > 0 && visibleClusters.length === 0 && emptyHint('All spawns hidden by the "Hide seen-once" filter.')}
+
+            {/* Admin embed (zonesProvided) — selection-driven hints, unchanged. */}
+            {serverId && zonesProvided && selectedMobs.size === 0 && !(allowBareZone && zoneNo) && emptyHint('Select one or more mobs from the list.')}
+            {serverId && zonesProvided && selectedMobs.size > 0 && !zoneNo && !loadingIndex && emptyHint('No zone data for the selected mob(s).')}
+            {serverId && zonesProvided && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length === 0 && !allowBareZone && emptyHint('No spawns for this selection.')}
+            {serverId && zonesProvided && selectedMobs.size > 0 && zoneNo && !loadingMap && clusters.length > 0 && visibleClusters.length === 0 && emptyHint('All spawns hidden by the "Hide seen-once" filter.')}
+
+            {/* User path (zone-first) — the map renders whenever the EFFECTIVE mob set
+                has spawns; that set defaults to the zone's (filtered) mobs, so no manual
+                mob check is required. */}
+            {serverId && !zonesProvided && !zoneNo && !loadingIndex && !loadingMap && emptyHint(zoneOptions.length ? 'Select a zone from the list.' : 'No zone data for this server.')}
+            {serverId && !zonesProvided && zoneNo && effectiveMobIds.size === 0 && !loadingMap && !loadingIndex && emptyHint('No monsters recorded for this zone.')}
+            {serverId && !zonesProvided && zoneNo && effectiveMobIds.size > 0 && !loadingMap && clusters.length === 0 && emptyHint('No spawns for this selection.')}
+            {serverId && !zonesProvided && zoneNo && effectiveMobIds.size > 0 && !loadingMap && clusters.length > 0 && visibleClusters.length === 0 && emptyHint('All spawns hidden by the "Hide seen-once" filter.')}
+
+            {/* Zone-first mob-checklist filters (user path). Rendered independently of
+                the map frame so they stay reachable even when the current filters empty
+                the map (turning them ON can hide everything — the user must be able to
+                turn them back OFF). Same style as the in-frame view toggles. */}
+            {serverId && !zonesProvided && (
+              <Stack direction="row" flexWrap="wrap" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
+                <FormControlLabel
+                  sx={{ mr: 0 }}
+                  control={
+                    <Switch
+                      size="small" checked={zoneMobsOnly}
+                      onChange={(e) => setZoneMobsOnly(e.target.checked)}
+                    />
+                  }
+                  label={<Typography variant="caption" color="text.secondary">Show only zone monsters</Typography>}
+                />
+                <FormControlLabel
+                  sx={{ mr: 0 }}
+                  control={
+                    <Switch
+                      size="small" checked={recordedMobsOnly}
+                      onChange={(e) => setRecordedMobsOnly(e.target.checked)}
+                    />
+                  }
+                  label={<Typography variant="caption" color="text.secondary">Show only recorded monsters</Typography>}
+                />
+              </Stack>
+            )}
 
             {activeFrame && (
               <Box sx={{ position: 'relative' }}>

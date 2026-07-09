@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.16.6] — Monster Map: zone-first, Standard Zone 0 + Zonen-/Aufzeichnungs-Filter
+
+### Changed
+
+- **Die Monster Map ist jetzt „zone-first".** Das Zonen-Dropdown listet **jede Zone mit Daten**
+  (unabhängig von der Mob-Auswahl) und ist sofort nutzbar. Beim Laden wird standardmäßig
+  **Zone 0** vorausgewählt (bzw. die niedrigste Zone mit Daten, falls 0 keine hat) — **auch ohne
+  aktiv gewähltes Monster**. Ohne explizite Mob-Auswahl zeigt die Karte automatisch alle
+  (gefilterten) Monster der Zone; das Auswählen einzelner Mobs grenzt weiter ein.
+
+### Added
+
+- **Filter „Show only zone monsters" (Standard an).** Beschränkt die Mob-Liste auf Monster,
+  deren aufgezeichnete Zonen die gewählte Zone enthalten.
+- **Filter „Show only recorded monsters" (Standard an).** Beschränkt auf Monster mit
+  verlässlicher Aufzeichnung (`hits>1` bzw. `reliability ≥ 0,15`) in der aktuellen
+  Zone/Version.
+
+Reine Client-Änderung; kein zusätzlicher Request beim Umschalten der Filter. Der
+Admin-Embed-Pfad (`zonesProvided`) bleibt unverändert.
+
 ## [0.16.5] — Offsets: „veraltet — neu signieren"-Erkennung
 
 ### Added

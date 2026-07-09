@@ -1,7 +1,7 @@
 {
   "name": "bot-portal-server",
   "private": true,
-  "version": "0.16.5",
+  "version": "0.16.6",
   "type": "module",
   "dependencies": {
     "@noble/ed25519": "^2.1.0",
