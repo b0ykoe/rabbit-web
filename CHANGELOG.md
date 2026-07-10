@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.18.0] — Import der kompilierten Per-Build-Overrides des Bots
+
+### Added
+
+- **`POST /servers/:id/builds/import`** (nur super_admin, Multipart) importiert
+  die vom Bot exportierte `build_overrides.json` (Dev > Exporter). Pro Build
+  wird `server_builds` per `UNIQUE(server_id, stamp)` upgesertet und die
+  Per-Build-Overrides (`server_build_overrides`) komplett ersetzt; jeder
+  berührte Build-Blob wird invalidiert (muss neu signiert werden). Jeder
+  `field_name` wird gegen den `offset_field_catalog` geprüft — **400 bei
+  unbekanntem Feld** (also den Offset-Katalog zuerst importieren). Alles in einer
+  Transaktion, Antwort `{ ok, builds_written, overrides_written }`. Keine
+  Migration nötig (Tabellen aus 040/041).
+- **„Import overrides"-Button** im Per-Build-Bereich (`BuildsSection`) lädt die
+  `build_overrides.json` hoch und lädt die Build-Liste neu. Damit lässt sich die
+  Per-Build-Ebene aus der kompilierten Wahrheit des Bots bootstrappen, statt
+  jeden Engine.dll-Stamp von Hand anzulegen und Feld für Feld zu tippen.
+
 ## [0.17.1] — Share-Landing-Page mit echter Vorschau
 
 ### Changed

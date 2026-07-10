@@ -193,6 +193,15 @@ export const adminApi = {
   putServerBuildOffsets:  (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
   signServerBuild:        (id, bid, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
   signAllServerBuilds:    (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/sign-all`, { method: 'POST', body: JSON.stringify({ password }) }),
+  // Bulk-import the bot's compiled per-build override table (build_overrides.json
+  // from Dev > Exporter). Multipart FormData (single field "file"), same pattern as
+  // importOffsetCatalog. Upserts server_builds + REPLACE-ALL per-build overrides and
+  // invalidates each touched build's signed blob → { ok, builds_written, overrides_written }.
+  importServerBuildOverrides: (id, file) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/import`, { method: 'POST', body: fd });
+  },
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────

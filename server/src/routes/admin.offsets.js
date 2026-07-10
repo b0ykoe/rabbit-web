@@ -981,6 +981,135 @@ router.post('/servers/:id/builds', requireSuperAdmin, validate(buildCreateSchema
   res.status(201).json({ id: Number(id), stamp, size, label: label ?? null });
 });
 
+// ── POST /servers/:id/builds/import ──────────────────────────────────────────
+// BULK-import the bot's compiled per-build override table (build_overrides.json,
+// produced by the Dev > Exporter tab from engine_variant_nemesis.cpp
+// EnumerateCompiledBuildOverrides). Body (multipart field 'file') is
+//   { kind:"rabbit-build-overrides", builds:[ { stamp, size, label?,
+//                                               fields:{ field_name: intValue } } ] }
+// For each build: UPSERT server_builds by UNIQUE(server_id, stamp) — insert if new,
+// else reuse the row and refresh size/label — then REPLACE-ALL that build's
+// server_build_overrides from `fields`, and INVALIDATE its signed blob (content
+// changed → must be re-signed). Every field_name is validated against
+// offset_field_catalog up front (400 on ANY unknown — import the offset catalog
+// FIRST). One transaction. Responds { ok, builds_written, overrides_written }.
+router.post('/servers/:id/builds/import', requireSuperAdmin, catalogUploadSingle, async (req, res) => {
+  const cleanupTmp = () => { try { if (req.file) fs.unlinkSync(req.file.path); } catch { /* ignore */ } };
+
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) { cleanupTmp(); return res.status(400).json({ error: 'Bad server id' }); }
+  if (!req.file) return res.status(400).json({ error: 'File is required (field "file")' });
+
+  const server = await db('game_servers').where('id', serverId).select('id').first();
+  if (!server) { cleanupTmp(); return res.status(404).json({ error: 'Server not found' }); }
+
+  let text;
+  try { text = fs.readFileSync(req.file.path, 'utf8'); }
+  catch { cleanupTmp(); return res.status(400).json({ error: 'Could not read upload' }); }
+  cleanupTmp();
+
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);   // strip UTF-8 BOM
+
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch { return res.status(400).json({ error: 'File is not valid JSON' }); }
+
+  const rawBuilds = parsed && typeof parsed === 'object' && Array.isArray(parsed.builds) ? parsed.builds : null;
+  if (!rawBuilds) {
+    return res.status(400).json({ error: 'Expected the bot\'s build_overrides.json ({ kind:"rabbit-build-overrides", builds:[…] })' });
+  }
+
+  // Caps so a hostile upload can't drive an unbounded write.
+  const BUILD_CAP = 512;
+  const FIELDS_PER_BUILD_CAP = 4000;
+
+  // Normalize builds: stamp/size must be non-negative integers; fields is a
+  // { field_name: intValue } map (non-integer values dropped). Builds with a bad
+  // stamp/size are skipped. Duplicate stamps in the file collapse (last wins) since
+  // server_builds is UNIQUE(server_id, stamp).
+  const intOrNull = (v) => { const n = Number(v); return Number.isInteger(n) ? n : null; };
+  const byStamp = new Map();   // stamp -> { stamp, size, label, fields:Map(name->int) }
+  for (const rb of rawBuilds.slice(0, BUILD_CAP)) {
+    if (!rb || typeof rb !== 'object') continue;
+    const stamp = intOrNull(rb.stamp);
+    const size  = intOrNull(rb.size);
+    if (stamp == null || stamp < 0 || size == null || size < 0) continue;
+    const label = (typeof rb.label === 'string' && rb.label.trim()) ? rb.label.trim().slice(0, 64) : null;
+    const fields = new Map();
+    const fobj = rb.fields && typeof rb.fields === 'object' && !Array.isArray(rb.fields) ? rb.fields : {};
+    for (const [fname, fval] of Object.entries(fobj)) {
+      if (fields.size >= FIELDS_PER_BUILD_CAP) break;
+      const name = String(fname).trim();
+      if (name.length < 1 || name.length > 64) continue;
+      const val = intOrNull(fval);
+      if (val == null) continue;                 // numeric-only import (VAs / data offsets)
+      fields.set(name, val);
+    }
+    byStamp.set(stamp, { stamp, size, label, fields });
+  }
+
+  const builds = [...byStamp.values()];
+  if (!builds.length) {
+    return res.status(400).json({ error: 'No valid builds in the file (each build needs an integer stamp + size).' });
+  }
+
+  // Validate EVERY referenced field_name against the catalog (400 on any unknown —
+  // the offset catalog must be imported before per-build values, exactly like
+  // PUT /builds/:bid/offsets). One query over the whole union.
+  const allNames = [...new Set(builds.flatMap(b => [...b.fields.keys()]))];
+  if (allNames.length) {
+    const known = new Set(await db('offset_field_catalog').whereIn('field_name', allNames).pluck('field_name'));
+    const unknown = allNames.filter(n => !known.has(n));
+    if (unknown.length) {
+      return res.status(400).json({ error: 'Unknown field_name(s) — import the offset catalog first', fields: unknown });
+    }
+  }
+
+  const now = nowSec();
+  let buildsWritten = 0;
+  let overridesWritten = 0;
+
+  await db.transaction(async (trx) => {
+    for (const b of builds) {
+      // UPSERT the build row by UNIQUE(server_id, stamp).
+      const existing = await trx('server_builds').where({ server_id: serverId, stamp: b.stamp }).select('id').first();
+      let buildId;
+      if (existing) {
+        buildId = existing.id;
+        // Refresh size/label + INVALIDATE the signed blob (content is about to change).
+        await trx('server_builds').where('id', buildId).update({
+          size: b.size, label: b.label, signed_blob: null, signed_at: null, updated_at: now,
+        });
+      } else {
+        const [id] = await trx('server_builds').insert({
+          server_id: serverId, stamp: b.stamp, size: b.size, label: b.label,
+          signed_blob: null, signed_at: null, created_at: now, updated_at: now,
+        });
+        buildId = id;
+      }
+
+      // REPLACE-ALL this build's per-build overrides from the file's numeric fields.
+      await trx('server_build_overrides').where('server_build_id', buildId).del();
+      if (b.fields.size) {
+        await trx('server_build_overrides').insert(
+          [...b.fields.entries()].map(([field_name, value]) => ({
+            server_build_id: buildId, field_name, value, value_text: null, updated_at: now,
+          })),
+        );
+      }
+      buildsWritten += 1;
+      overridesWritten += b.fields.size;
+    }
+  });
+
+  await recordAudit(db, req, {
+    action: 'world.build.import', subjectType: 'game_server', subjectId: String(serverId),
+    newValues: { builds_written: buildsWritten, overrides_written: overridesWritten },
+  });
+
+  res.json({ ok: true, builds_written: buildsWritten, overrides_written: overridesWritten });
+});
+
 // ── PATCH /servers/:id/builds/:bid ───────────────────────────────────────────
 // Edit the build's label (null clears it).
 router.patch('/servers/:id/builds/:bid', requireSuperAdmin, validate(buildUpdateSchema), async (req, res) => {

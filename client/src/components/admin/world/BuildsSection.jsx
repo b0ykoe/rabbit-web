@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box, Stack, Paper, Typography, Button, Chip, IconButton, Tooltip, Skeleton, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -9,6 +9,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import LockIcon from '@mui/icons-material/Lock';
 import MemoryIcon from '@mui/icons-material/Memory';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import OffsetFieldTable, { parseIntFlexible, hasInvalidOverride, fieldHex } from './OffsetFieldTable.jsx';
@@ -359,6 +360,8 @@ export default function BuildsSection({ serverId, serverName }) {
   const [signTarget, setSignTarget] = useState(null);   // { build } | { all:true } for sign dialog
   const [delTarget, setDelTarget]   = useState(null);   // build pending delete
   const [deleting, setDeleting]     = useState(false);
+  const [importing, setImporting]   = useState(false);
+  const fileInputRef = useRef(null);
 
   const load = useCallback(async () => {
     if (serverId == null) return;
@@ -368,6 +371,32 @@ export default function BuildsSection({ serverId, serverName }) {
   }, [serverId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Bulk-import the bot's build_overrides.json (Dev > Exporter). Upserts one build
+  // per stamp + REPLACE-ALLs each build's overrides; the server responds with the
+  // written counts. A 400 with err.data.fields means the offset catalog must be
+  // imported first (unknown field names). Re-picking the same file is allowed
+  // (value reset) so a fresh export re-imports without a page reload.
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await adminApi.importServerBuildOverrides(serverId, file);
+      showSnackbar(
+        `Imported ${res?.builds_written ?? 0} build(s), ${res?.overrides_written ?? 0} override(s). `
+        + 'Each touched build\'s signed blob is invalidated — re-sign to apply.',
+      );
+      load();
+    } catch (err) {
+      const fields = err?.data?.fields;
+      const suffix = Array.isArray(fields) && fields.length ? ` (${fields.join(', ')})` : '';
+      showSnackbar(errMsg(err, 'Import failed') + suffix, 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!delTarget) return;
@@ -404,6 +433,26 @@ export default function BuildsSection({ serverId, serverName }) {
             </Button>
           </span>
         </Tooltip>
+        <Tooltip title="Import the bot's build_overrides.json (Dev > Exporter) — creates one build per Engine.dll stamp and fills its per-build overrides. Import the offset catalog first.">
+          <span>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<UploadFileIcon fontSize="small" />}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={importing}
+            >
+              {importing ? 'Importing…' : 'Import overrides'}
+            </Button>
+          </span>
+        </Tooltip>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={handleImportFile}
+        />
         <Button size="small" variant="outlined" startIcon={<AddIcon fontSize="small" />} onClick={() => setAddOpen(true)}>
           Add build
         </Button>
