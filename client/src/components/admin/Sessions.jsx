@@ -7,6 +7,7 @@ import {
 } from '@mui/material';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
 import PublicIcon from '@mui/icons-material/Public';
+import BarChartIcon from '@mui/icons-material/BarChart';
 import DataTable from '../common/DataTable.jsx';
 import StatusBadge from '../common/StatusBadge.jsx';
 import CopyableText from '../common/CopyableText.jsx';
@@ -103,6 +104,74 @@ function ProxyStatsDialog({ sessionId, onClose }) {
   );
 }
 
+// Full per-scope breakdown for one session — all-time / session / plan as a
+// clean matrix. Data already rides on the session row (row.stats); no fetch.
+function StatsDialog({ session, onClose }) {
+  const s = session?.stats;
+  const fmtXp = (v) => `${((v || 0) / 1000).toFixed(1)}k`;
+  const dur = (ms) => (ms > 0 ? formatDuration(Math.floor(ms / 1000)) : '—');
+  const cols = s ? [
+    { key: 'all',     label: 'All-time', hint: 'since bot start',      d: s,         dur: s.runtime_ms,        active: true },
+    { key: 'session', label: 'Session',  hint: 'since training start', d: s.session, dur: s.session?.duration_ms, active: !!s.session?.active },
+    { key: 'plan',    label: 'Plan',     hint: 'current run',          d: s.plan,    dur: s.plan?.duration_ms,    active: !!s.plan?.active },
+  ] : [];
+  const rows = [
+    { label: 'Duration', cell: (c) => (c.d ? dur(c.dur) : '—') },
+    { label: 'Kills',    cell: (c) => (c.d ? (c.d.kills || 0) : '—') },
+    { label: 'EXP',      cell: (c) => (c.d ? fmtXp(c.d.xp_earned) : '—') },
+    { label: 'Items',    cell: (c) => (c.d ? (c.d.items_looted || 0) : '—') },
+    { label: 'Skills',   cell: (c) => (c.d ? (c.d.skills_used || 0) : '—') },
+    { label: 'Deaths',   cell: (c) => (c.d ? (c.d.deaths || 0) : '—') },
+  ];
+  return (
+    <Dialog open={!!session} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Bot statistics</DialogTitle>
+      <DialogContent dividers>
+        {!s && <Typography color="text.disabled">No stats reported for this session.</Typography>}
+        {s && (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell />
+                {cols.map((c) => (
+                  <TableCell key={c.key} align="right">
+                    <Typography variant="subtitle2">{c.label}</Typography>
+                    <Typography variant="caption"
+                                color={c.key !== 'all' && !c.active ? 'text.disabled' : 'text.secondary'}
+                                sx={{ display: 'block' }}>
+                      {c.key === 'all' ? c.hint : (c.active ? 'active' : 'idle')}
+                    </Typography>
+                  </TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.label}>
+                  <TableCell>
+                    <Typography variant="body2" color="text.secondary">{r.label}</Typography>
+                  </TableCell>
+                  {cols.map((c) => (
+                    <TableCell key={c.key} align="right">
+                      <Typography variant="body2" fontFamily="monospace"
+                                  color={c.key !== 'all' && !c.active ? 'text.disabled' : 'text.primary'}>
+                        {r.cell(c)}
+                      </Typography>
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function timeAgo(ts) {
   if (!ts) return '';
   const s = Math.floor(Date.now() / 1000) - ts;
@@ -122,6 +191,7 @@ export default function Sessions() {
   const canSeeIp = me?.role === 'super_admin';
   const [killTarget, setKillTarget] = useState(null);
   const [proxyStatsSession, setProxyStatsSession] = useState(null);
+  const [statsSession, setStatsSession] = useState(null);
 
   useEffect(() => {
     const interval = setInterval(refetch, 5000);
@@ -251,34 +321,23 @@ export default function Sessions() {
       },
     },
     {
-      id: 'stats', label: 'Stats (all-time · session · plan)',
+      id: 'stats', label: 'Stats',
       render: (row) => {
         const s = row.stats;
         if (!s) return <Typography variant="caption" color="text.disabled">-</Typography>;
         const fmtXp = (v) => `${((v || 0) / 1000).toFixed(1)}k`;
-        // A per-scope one-liner, shown only while that scope is live (the bot
-        // sends active=false for a scope that isn't running).
-        const scopeLine = (label, sc) => (sc && sc.active) ? (
-          <Typography key={label} variant="caption" color="text.secondary"
-                      sx={{ display: 'block', lineHeight: 1.4 }}>
-            <b>{label}:</b> {sc.kills || 0} kills · {fmtXp(sc.xp_earned)} XP · {sc.items_looted || 0} items
-            {sc.skills_used > 0 ? ` · ${sc.skills_used} skills` : ''}
-            {sc.deaths > 0 ? ` · ${sc.deaths} deaths` : ''}
-          </Typography>
-        ) : null;
+        const liveScope = s.plan?.active ? 'plan' : (s.session?.active ? 'session' : null);
         return (
-          <Box>
-            {/* All-time (since this bot start) — the headline chips. */}
-            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-              {s.kills > 0 && <Chip label={`${s.kills} kills`} size="small" variant="outlined" />}
-              {s.xp_earned > 0 && <Chip label={`${fmtXp(s.xp_earned)} XP`} size="small" variant="outlined" color="primary" />}
-              {s.items_looted > 0 && <Chip label={`${s.items_looted} items`} size="small" variant="outlined" />}
-              {s.skills_used > 0 && <Chip label={`${s.skills_used} skills`} size="small" variant="outlined" />}
-              {s.deaths > 0 && <Chip label={`${s.deaths} deaths`} size="small" variant="outlined" color="error" />}
-            </Box>
-            {/* Live training-session + plan-run snapshots (older rows omit these). */}
-            {scopeLine('Session', s.session)}
-            {scopeLine('Plan', s.plan)}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+            {/* Compact all-time headline; full all-time/session/plan in the dialog. */}
+            {s.kills > 0 && <Chip label={`${s.kills} kills`} size="small" variant="outlined" />}
+            {s.xp_earned > 0 && <Chip label={`${fmtXp(s.xp_earned)} XP`} size="small" variant="outlined" color="primary" />}
+            {liveScope && <Chip label={liveScope} size="small" color="success" variant="outlined" />}
+            <Tooltip title="All-time · session · plan breakdown">
+              <IconButton size="small" onClick={() => setStatsSession(row)}>
+                <BarChartIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
         );
       },
@@ -361,6 +420,11 @@ export default function Sessions() {
       <ProxyStatsDialog
         sessionId={proxyStatsSession}
         onClose={() => setProxyStatsSession(null)}
+      />
+
+      <StatsDialog
+        session={statsSession}
+        onClose={() => setStatsSession(null)}
       />
     </Box>
   );
