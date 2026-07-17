@@ -125,6 +125,15 @@ export const adminApi = {
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/overview${qs}`);
   },
 
+  // Per-server captcha telemetry (super-admin) — additive. Returns
+  // { server_id, summary:{ total, solved, by_id, by_text, avg_solve_ms, last_sec },
+  //   events:[{ id, user, zone_no, method, outcome, correct_id, chosen_slot,
+  //             slot_ids, solve_ms, raw_hex, created_sec … }] } newest-first.
+  getServerCaptcha: (id, limit) => {
+    const qs = limit ? `?${new URLSearchParams({ limit: String(limit) }).toString()}` : '';
+    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/captcha${qs}`);
+  },
+
   // Import a bot-exported reference name list (super-admin) — additive. The bot
   // writes names.json / zones.csv / mobs.csv locally; the admin uploads one file
   // here. Multipart FormData (single field "file"), same pattern as uploadZoneMap

@@ -220,6 +220,28 @@ export const spawnIngestSchema = z.object({
   session_id: z.string().uuid().optional(),
 });
 
+// ── Bot: Captcha telemetry (world) ───────────────────────────────────────────
+// One row per captcha the bot's auto-solver observed. All fields but outcome are
+// optional/back-compat; the *_ms values are client GetTickCount ticks (NOT wall
+// clocks) — the portal stamps its own created_sec on receive.
+export const captchaEventSchema = z.object({
+  shown_at_ms:  z.number().int().nonnegative().optional(),
+  solved_at_ms: z.number().int().nonnegative().optional(),
+  correct_id:   z.number().int().nonnegative().optional(),
+  chosen_slot:  z.number().int().optional(),               // -1 when none
+  slot_ids:     z.array(z.number().int().nonnegative()).max(8).optional(),
+  zone_no:      z.number().int().min(0).max(65535).optional(),
+  method:       z.string().max(16).optional(),             // id | text | none
+  outcome:      z.string().max(16).optional(),             // solved | unsolved | closed | superseded
+  raw_hex:      z.string().max(512).optional(),
+});
+
+export const captchaIngestSchema = z.object({
+  token:     z.string().optional(),                        // consumed by validateSpawnIngest
+  server_id: z.coerce.number().int().positive().optional(),
+  events:    z.array(captchaEventSchema).min(1).max(200),
+});
+
 // ── Bot: Recording sessions (world) ──────────────────────────────────────────
 // Backend-issued scan sessions (033). session_id rides ALONGSIDE run_id (run_id
 // stays the version bucket); the portal mints the uuid so the bot never has to.

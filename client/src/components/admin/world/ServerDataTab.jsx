@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Paper, Tabs, Tab, TextField, InputAdornment, Typography,
+  Box, Paper, Tabs, Tab, TextField, InputAdornment, Typography, Stack, Chip,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Skeleton,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import AssetStatusIcon from './AssetStatusIcon.jsx';
+import { adminApi } from '../../../api/endpoints.js';
 
-const SUB_TABS = ['Monsters', 'NPCs', 'Zones'];
+const SUB_TABS = ['Monsters', 'NPCs', 'Zones', 'Captcha'];
 
 // "min-max" (single value when equal), "—" when both null. Used for the mob
 // catalog's level and maxhp ranges.
@@ -95,7 +96,25 @@ function DataTable({ rows, columns, filter, placeholder, loading, emptyLabel, ro
 // The Data reference tab (P5): read-only drill-in over the coverage overview's
 // reference lists. Sub-tabs Monsters | NPCs | Zones, each a client-side searchable
 // table. Props: { server, overview, loading }. Pure read — no mutations.
-export default function ServerDataTab({ overview, loading }) {
+// Captcha rollup chips shown above the events table.
+function CaptchaSummary({ summary, loading }) {
+  if (loading) return <Skeleton variant="rounded" height={40} sx={{ mb: 2 }} />;
+  const s = summary || {};
+  const total = s.total || 0;
+  const solved = s.solved || 0;
+  const rate = total > 0 ? Math.round((solved / total) * 100) : 0;
+  return (
+    <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
+      <Chip size="small" label={`Total ${total}`} />
+      <Chip size="small" color={total > 0 && rate >= 90 ? 'success' : 'default'} label={`Solved ${solved} (${rate}%)`} />
+      <Chip size="small" variant="outlined" label={`by id ${s.by_id || 0} · by text ${s.by_text || 0}`} />
+      <Chip size="small" variant="outlined" label={`avg answer ${s.avg_solve_ms != null ? `${s.avg_solve_ms} ms` : '—'}`} />
+      <Chip size="small" variant="outlined" label={`last ${timeAgo(s.last_sec)}`} />
+    </Stack>
+  );
+}
+
+export default function ServerDataTab({ server, overview, loading }) {
   const [sub, setSub] = useState(0);
 
   const mobs  = overview?.mobs  || [];
@@ -104,11 +123,30 @@ export default function ServerDataTab({ overview, loading }) {
 
   const busy = loading && !overview;
 
+  // Captcha telemetry is its own endpoint, fetched lazily the first time the
+  // Captcha sub-tab is opened (and reset when the server changes).
+  const serverId = server?.id;
+  const [captcha, setCaptcha]       = useState(null);
+  const [capLoading, setCapLoading] = useState(false);
+  useEffect(() => { setCaptcha(null); }, [serverId]);
+  useEffect(() => {
+    if (sub !== 3 || serverId == null || captcha != null || capLoading) return;
+    let alive = true;
+    setCapLoading(true);
+    adminApi.getServerCaptcha(serverId, 500)
+      .then((res) => { if (alive) setCaptcha(res || { summary: {}, events: [] }); })
+      .catch(() => { if (alive) setCaptcha({ summary: {}, events: [] }); })
+      .finally(() => { if (alive) setCapLoading(false); });
+    return () => { alive = false; };
+  }, [sub, serverId, captcha, capLoading]);
+
+  const counts = [mobs.length, npcs.length, zones.length, captcha?.summary?.total ?? null];
+
   return (
     <Paper variant="outlined" sx={{ p: 2.5 }}>
       <Tabs value={sub} onChange={(_e, v) => setSub(v)} sx={{ mb: 2, minHeight: 40 }}>
         {SUB_TABS.map((label, i) => (
-          <Tab key={label} label={`${label}${i === 0 ? ` (${mobs.length})` : i === 1 ? ` (${npcs.length})` : ` (${zones.length})`}`} sx={{ minHeight: 40 }} />
+          <Tab key={label} label={counts[i] != null ? `${label} (${counts[i]})` : label} sx={{ minHeight: 40 }} />
         ))}
       </Tabs>
 
@@ -204,6 +242,64 @@ export default function ServerDataTab({ overview, loading }) {
             ) },
           ]}
         />
+      )}
+
+      {/* Captcha — per-server telemetry: summary rollup + recent events. Events
+          uploaded without a selected server land with server_id NULL and are not
+          shown here (they belong to no server). */}
+      {sub === 3 && (
+        <Box>
+          <CaptchaSummary summary={captcha?.summary} loading={capLoading && !captcha} />
+          <DataTable
+            rows={captcha?.events || []}
+            loading={capLoading && !captcha}
+            placeholder="Search by user, method, outcome, zone…"
+            emptyLabel="No captcha events recorded for this server."
+            filter={(r, n) =>
+              (r.user || '').toLowerCase().includes(n)
+              || (r.method || '').toLowerCase().includes(n)
+              || (r.outcome || '').toLowerCase().includes(n)
+              || String(r.zone_no ?? '').includes(n)}
+            columns={[
+              { key: 'created_sec', label: 'When', align: 'right', render: (r) => (
+                <Box component="span" sx={{ color: 'text.disabled' }}>{timeAgo(r.created_sec)}</Box>
+              ) },
+              { key: 'user', label: 'User', render: (r) => r.user || (
+                <Box component="span" sx={{ color: 'text.disabled', fontStyle: 'italic' }}>—</Box>
+              ) },
+              { key: 'zone_no', label: 'Zone', align: 'right', render: (r) => (
+                r.zone_no == null ? '—' : <Box component="span" sx={{ fontFamily: 'monospace' }}>#{r.zone_no}</Box>
+              ) },
+              { key: 'method', label: 'Method', render: (r) => r.method || '—' },
+              { key: 'outcome', label: 'Outcome', render: (r) => (
+                <Box component="span" sx={{
+                  color: r.outcome === 'solved' ? 'success.main'
+                       : (r.outcome === 'closed' || r.outcome === 'unsolved') ? 'warning.main'
+                       : 'text.secondary',
+                  fontWeight: 600,
+                }}>{r.outcome}</Box>
+              ) },
+              { key: 'slot', label: 'Correct → chosen', align: 'center', render: (r) => (
+                <Box component="span" sx={{ fontFamily: 'monospace' }}>
+                  {r.correct_id ?? '—'}
+                  {r.chosen_slot != null && r.chosen_slot >= 0 ? ` → slot ${r.chosen_slot}` : ''}
+                </Box>
+              ) },
+              { key: 'solve_ms', label: 'Answer', align: 'right', render: (r) => (
+                r.solve_ms == null
+                  ? <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>
+                  : <Box component="span" sx={{ fontFamily: 'monospace' }}>{r.solve_ms} ms</Box>
+              ) },
+              { key: 'raw_hex', label: 'Raw', render: (r) => (
+                r.raw_hex
+                  ? <Box component="span" title={r.raw_hex} sx={{ fontFamily: 'monospace', fontSize: '0.7rem', color: 'text.disabled' }}>
+                      {r.raw_hex.slice(0, 16)}{r.raw_hex.length > 16 ? '…' : ''}
+                    </Box>
+                  : <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>
+              ) },
+            ]}
+          />
+        </Box>
       )}
     </Paper>
   );

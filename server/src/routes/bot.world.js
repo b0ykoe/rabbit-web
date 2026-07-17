@@ -32,7 +32,7 @@ import db from '../db.js';
 import { validateSpawnIngest } from '../middleware/spawnIngest.js';
 import { flagEnabledFor } from '../services/featureFlags.js';
 import {
-  validate, spawnIngestSchema,
+  validate, spawnIngestSchema, captchaIngestSchema,
   sessionStartSchema, sessionStopSchema,
 } from '../validation/schemas.js';
 
@@ -609,6 +609,60 @@ router.post('/spawns',
       cells: cellAgg.size,
       mobs:  mobAgg.size,
     });
+  });
+
+// ── POST /captcha ────────────────────────────────────────────────────────────
+// Captcha telemetry: one row per captcha the bot's auto-solver observed. Unlike
+// /spawns this is NOT gated on spawn_tracking — it is a core anti-detection
+// signal every user reports. Auth (validateSpawnIngest) still runs, and the user
+// is RESOLVED from the token (never a body field). server_id is context-only and
+// null-tolerant. Rows are append-only; *_ms values are client ticks, so the
+// portal stamps its own created_sec on receive.
+router.post('/captcha',
+  validateSpawnIngest,
+  validate(captchaIngestSchema),
+  async (req, res) => {
+    const userId = await resolveUserId(req);
+    if (userId == null) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { server_id, events } = req.validated;
+    const now = nowSec();
+
+    // Resolve server_id null-tolerantly — context only, never required. A
+    // supplied-but-unknown id is simply dropped (stored NULL), not rejected.
+    let serverId = null;
+    if (server_id != null) {
+      const srv = await db('game_servers').where('id', server_id).first();
+      if (srv) serverId = srv.id;
+    }
+
+    const rows = events.map((e) => {
+      const shown  = Number.isInteger(e.shown_at_ms)  ? e.shown_at_ms  : null;
+      const solved = Number.isInteger(e.solved_at_ms) && e.solved_at_ms > 0
+        ? e.solved_at_ms : null;
+      const solveMs = (shown != null && solved != null && solved >= shown)
+        ? (solved - shown) : null;
+      return {
+        user_id:      userId,
+        server_id:    serverId,
+        zone_no:      Number.isInteger(e.zone_no)     ? e.zone_no     : null,
+        shown_at_ms:  shown,
+        solved_at_ms: solved,
+        solve_ms:     solveMs,
+        correct_id:   Number.isInteger(e.correct_id)  ? e.correct_id  : null,
+        chosen_slot:  Number.isInteger(e.chosen_slot) ? e.chosen_slot : null,
+        slot_ids:     Array.isArray(e.slot_ids) ? JSON.stringify(e.slot_ids) : null,
+        method:       (e.method  || '').slice(0, 16),
+        outcome:      (e.outcome || 'unsolved').slice(0, 16),
+        raw_hex:      (e.raw_hex || '').slice(0, 512),
+        created_sec:  now,
+      };
+    });
+
+    if (rows.length) await db('captcha_events').insert(rows);
+    return res.json({ ok: true, accepted: rows.length });
   });
 
 // ── POST /session/start ──────────────────────────────────────────────────────

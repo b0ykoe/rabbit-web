@@ -251,16 +251,34 @@ export default function Sessions() {
       },
     },
     {
-      id: 'stats', label: 'Stats',
+      id: 'stats', label: 'Stats (all-time · session · plan)',
       render: (row) => {
         const s = row.stats;
         if (!s) return <Typography variant="caption" color="text.disabled">-</Typography>;
+        const fmtXp = (v) => `${((v || 0) / 1000).toFixed(1)}k`;
+        // A per-scope one-liner, shown only while that scope is live (the bot
+        // sends active=false for a scope that isn't running).
+        const scopeLine = (label, sc) => (sc && sc.active) ? (
+          <Typography key={label} variant="caption" color="text.secondary"
+                      sx={{ display: 'block', lineHeight: 1.4 }}>
+            <b>{label}:</b> {sc.kills || 0} kills · {fmtXp(sc.xp_earned)} XP · {sc.items_looted || 0} items
+            {sc.skills_used > 0 ? ` · ${sc.skills_used} skills` : ''}
+            {sc.deaths > 0 ? ` · ${sc.deaths} deaths` : ''}
+          </Typography>
+        ) : null;
         return (
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-            {s.kills > 0 && <Chip label={`${s.kills} kills`} size="small" variant="outlined" />}
-            {s.xp_earned > 0 && <Chip label={`${(s.xp_earned / 1000).toFixed(1)}k XP`} size="small" variant="outlined" color="primary" />}
-            {s.items_looted > 0 && <Chip label={`${s.items_looted} items`} size="small" variant="outlined" />}
-            {s.deaths > 0 && <Chip label={`${s.deaths} deaths`} size="small" variant="outlined" color="error" />}
+          <Box>
+            {/* All-time (since this bot start) — the headline chips. */}
+            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+              {s.kills > 0 && <Chip label={`${s.kills} kills`} size="small" variant="outlined" />}
+              {s.xp_earned > 0 && <Chip label={`${fmtXp(s.xp_earned)} XP`} size="small" variant="outlined" color="primary" />}
+              {s.items_looted > 0 && <Chip label={`${s.items_looted} items`} size="small" variant="outlined" />}
+              {s.skills_used > 0 && <Chip label={`${s.skills_used} skills`} size="small" variant="outlined" />}
+              {s.deaths > 0 && <Chip label={`${s.deaths} deaths`} size="small" variant="outlined" color="error" />}
+            </Box>
+            {/* Live training-session + plan-run snapshots (older rows omit these). */}
+            {scopeLine('Session', s.session)}
+            {scopeLine('Plan', s.plan)}
           </Box>
         );
       },

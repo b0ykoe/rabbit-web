@@ -1614,6 +1614,75 @@ function csvRow(values) {
   return values.map(csvField).join(',') + '\r\n';
 }
 
+// GET /api/admin/world/servers/:id/captcha — captcha telemetry for this server.
+// Returns a summary rollup + the most recent events. Events whose upload carried
+// no selected server_id land with server_id NULL and are NOT shown here (they
+// belong to no server); a future "unassigned" bucket could surface them.
+router.get('/servers/:id/captcha', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) {
+    return res.status(400).json({ error: 'Bad server id' });
+  }
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
+  const safeArr = (s) => {
+    if (!s) return null;
+    try { const a = JSON.parse(s); return Array.isArray(a) ? a : null; } catch { return null; }
+  };
+
+  const [rows, agg] = await Promise.all([
+    db('captcha_events').where('server_id', serverId)
+      .orderBy('created_sec', 'desc').limit(limit),
+    db('captcha_events').where('server_id', serverId).select(
+      db.raw('COUNT(*) as total'),
+      db.raw("SUM(CASE WHEN outcome = 'solved' THEN 1 ELSE 0 END) as solved"),
+      db.raw("SUM(CASE WHEN method = 'id'   THEN 1 ELSE 0 END) as by_id"),
+      db.raw("SUM(CASE WHEN method = 'text' THEN 1 ELSE 0 END) as by_text"),
+      db.raw('AVG(solve_ms) as avg_solve_ms'),
+      db.raw('MAX(created_sec) as last_sec'),
+    ).first(),
+  ]);
+
+  // Best-effort user display (id → name/email).
+  const userIds = [...new Set(rows.map((r) => r.user_id).filter((x) => x != null))];
+  const users = userIds.length
+    ? await db('users').whereIn('id', userIds).select('id', 'name', 'email')
+    : [];
+  const userById = new Map(users.map((u) => [u.id, u.name || u.email || `#${u.id}`]));
+
+  const events = rows.map((r) => ({
+    id: r.id,
+    user_id: r.user_id,
+    user: r.user_id != null ? (userById.get(r.user_id) || `#${r.user_id}`) : null,
+    zone_no: r.zone_no,
+    shown_at_ms: r.shown_at_ms,
+    solved_at_ms: r.solved_at_ms,
+    solve_ms: r.solve_ms,
+    correct_id: r.correct_id,
+    chosen_slot: r.chosen_slot,
+    slot_ids: safeArr(r.slot_ids),
+    method: r.method,
+    outcome: r.outcome,
+    raw_hex: r.raw_hex,
+    created_sec: r.created_sec,
+  }));
+
+  return res.json({
+    server_id: serverId,
+    summary: {
+      total:        Number(agg?.total  ?? 0),
+      solved:       Number(agg?.solved ?? 0),
+      by_id:        Number(agg?.by_id  ?? 0),
+      by_text:      Number(agg?.by_text ?? 0),
+      avg_solve_ms: agg?.avg_solve_ms != null ? Math.round(Number(agg.avg_solve_ms)) : null,
+      last_sec:     agg?.last_sec != null ? Number(agg.last_sec) : null,
+    },
+    events,
+  });
+});
+
 // GET /api/admin/world/servers/:id/spawns.csv — stream the full spawn heat.
 router.get('/servers/:id/spawns.csv', requireSuperAdmin, async (req, res) => {
   const serverId = parseInt(req.params.id, 10);
