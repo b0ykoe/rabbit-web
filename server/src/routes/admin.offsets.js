@@ -1300,6 +1300,55 @@ router.put('/servers/:id/builds/:bid/offsets', requireSuperAdmin, validate(build
   res.json({ ok: true, count: overrides.length });
 });
 
+// ── POST /servers/:id/builds/:bid/offset-dev-file ────────────────────────────
+// Emit this build's UNSIGNED effective profile as a bot-ingestible
+// offset_overrides.json (drop into %APPDATA%/<DATA_DIR_NAME>/ to bootstrap a Debug
+// bot on this exact Engine.dll). Same shape as the server-level offset-dev-file, but
+// the fields fold in this build's per-build overrides on top of the general effective
+// set (general ± template base, per-build wins) — the SAME merge buildEffectiveContent
+// / signOneBuild use, so the dev file can't drift from what would be signed. The
+// per-build layer is taken from the request body (the editor's WORKING copy) so an
+// unsaved edit exports as shown; omit it to export the saved-effective set. Body:
+//   { overrides?: [{ field_name, value }] | { field_name: value } }
+// Only catalog fields with a non-negative integer value are honoured (VAs kept —
+// a per-build dev file is for the exact stamp). 404 if the server or build is missing.
+router.post('/servers/:id/builds/:bid/offset-dev-file', requireSuperAdmin, async (req, res) => {
+  const serverId = parseInt(req.params.id, 10);
+  const buildId  = parseInt(req.params.bid, 10);
+  if (!Number.isFinite(serverId) || serverId < 0) return res.status(400).json({ error: 'Bad server id' });
+  if (!Number.isFinite(buildId)  || buildId  < 0) return res.status(400).json({ error: 'Bad build id' });
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const build = await db('server_builds').where({ id: buildId, server_id: serverId }).first();
+  if (!build) return res.status(404).json({ error: 'Build not found' });
+
+  // Normalise the working per-build overrides (array or map) → keep only numeric
+  // catalog fields with a non-negative integer value.
+  const known = new Set(await db('offset_field_catalog').whereNot('kind', 'name').pluck('field_name'));
+  const raw = req.body && req.body.overrides;
+  const pairs = Array.isArray(raw)
+    ? raw.map((o) => [o && o.field_name, o && o.value])
+    : (raw && typeof raw === 'object' ? Object.entries(raw) : []);
+  const working = {};
+  for (const [name, value] of pairs) {
+    const n = Number(value);
+    if (typeof name === 'string' && known.has(name) && Number.isInteger(n) && n >= 0) working[name] = n;
+  }
+
+  const general = await generalEffectiveFields(server, serverId);   // template + general (VAs kept)
+  const fields = { ...general, ...working };                        // per-build (working) wins
+
+  res.json({
+    v: 1,
+    server_id: serverId,
+    build_id: buildId,
+    stamp: Number(build.stamp),
+    size:  Number(build.size),
+    fields,
+  });
+});
+
 // Sign ONE build in place: fields = merge(template_base, general overrides,
 // per-build overrides) with precedence build > general > template; buildBlob with
 // the build's OWN stamp/size; store on server_builds.signed_blob/signed_at. Throws

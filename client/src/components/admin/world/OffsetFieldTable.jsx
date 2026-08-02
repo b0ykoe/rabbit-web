@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import {
-  Box, Stack, Typography, TextField, InputAdornment, Chip,
+  Box, Stack, Typography, TextField, InputAdornment, Chip, Button,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
+import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 
 // Loose value formatter for a field's offset/value: "0x" + lowercase hex, or "—"
 // for null. Unlike the fingerprint's fixed-width toHex, offset values vary wildly
@@ -66,6 +67,7 @@ function KindChip({ kind }) {
 //   onChange  — (field_name, rawString) => void
 export default function OffsetFieldTable({ catalog, effective, value, onChange }) {
   const [q, setQ] = useState('');
+  const [onlyOverrides, setOnlyOverrides] = useState(false);
 
   // Base lookup: catalog is authoritative; fall back to the effective list so a
   // base still shows even if a catalog row is momentarily absent.
@@ -80,9 +82,13 @@ export default function OffsetFieldTable({ catalog, effective, value, onChange }
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((r) => (r.field_name || '').toLowerCase().includes(needle));
-  }, [rows, q]);
+    let list = rows;
+    if (needle) list = list.filter((r) => (r.field_name || '').toLowerCase().includes(needle));
+    // "Only overrides" hides every row whose working raw is empty — a field counts as
+    // overridden while it holds any non-empty string (even a half-typed one).
+    if (onlyOverrides) list = list.filter((r) => (value?.[r.field_name] ?? '') !== '');
+    return list;
+  }, [rows, q, onlyOverrides, value]);
 
   // "(N of M overridden)" — a field counts as overridden when its working raw is a
   // non-empty string (regardless of validity, so a half-typed value still counts).
@@ -110,18 +116,29 @@ export default function OffsetFieldTable({ catalog, effective, value, onChange }
             sx={{ height: 20 }}
           />
         </Stack>
-        <TextField
-          size="small"
-          placeholder="Search fields…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          sx={{ minWidth: 220 }}
-          InputProps={{
-            startAdornment: (
-              <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
-            ),
-          }}
-        />
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <Button
+            size="small"
+            variant={onlyOverrides ? 'contained' : 'outlined'}
+            startIcon={<FilterAltOutlinedIcon fontSize="small" />}
+            onClick={() => setOnlyOverrides((v) => !v)}
+            sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            Only overrides
+          </Button>
+          <TextField
+            size="small"
+            placeholder="Search fields…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            sx={{ minWidth: 220 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
+              ),
+            }}
+          />
+        </Stack>
       </Stack>
 
       <TableContainer sx={{ maxHeight: 460 }}>
@@ -200,7 +217,9 @@ export default function OffsetFieldTable({ catalog, effective, value, onChange }
                   <Typography variant="body2" color="text.secondary">
                     {q.trim()
                       ? 'No fields match your search.'
-                      : 'No catalog fields yet — import offsets_catalog.json on the Offset signing page.'}
+                      : onlyOverrides
+                        ? 'No overrides set — every field uses its base. Turn off "Only overrides" to see all fields.'
+                        : 'No catalog fields yet — import offsets_catalog.json on the Offset signing page.'}
                   </Typography>
                 </TableCell>
               </TableRow>

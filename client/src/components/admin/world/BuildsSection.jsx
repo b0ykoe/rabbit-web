@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Box, Stack, Paper, Typography, Button, Chip, IconButton, Tooltip, Skeleton, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
@@ -10,11 +10,58 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import LockIcon from '@mui/icons-material/Lock';
 import MemoryIcon from '@mui/icons-material/Memory';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import ContentPasteGoIcon from '@mui/icons-material/ContentPasteGo';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import { adminApi } from '../../../api/endpoints.js';
 import { useSnackbar } from '../../../context/SnackbarContext.jsx';
 import OffsetFieldTable, { parseIntFlexible, hasInvalidOverride, fieldHex } from './OffsetFieldTable.jsx';
 
 const errMsg = (err, fallback) => err?.data?.error || err?.message || fallback;
+
+// Collect a working-copy override map ({ field_name -> rawString }) into the numeric
+// { field_name -> int } shape the export / copy / save paths all use: empty and
+// unparseable entries are dropped (identical to what handleSave writes).
+function collectFields(overrides) {
+  const fields = {};
+  for (const [name, raw] of Object.entries(overrides || {})) {
+    if (raw === '' || raw == null) continue;
+    const p = parseIntFlexible(raw);
+    if (!p.ok || p.value == null) continue;
+    fields[name] = p.value;
+  }
+  return fields;
+}
+
+// Parse a pasted C++-style "field = value;" block into overrides. Each line may carry
+// a trailing ';' and an inline '// comment' (both stripped); blank and full-comment
+// lines are ignored. RHS accepts hex (0x…) or decimal. Returns:
+//   values  — { field_name -> int } for keys present in the catalog (`knownNames`)
+//   unknown — keys that parsed but aren't in the catalog (reported, not applied)
+//   bad     — source lines that looked like an assignment but didn't parse
+function parseQuickOverrides(text, knownNames) {
+  const values = {};
+  const unknown = [];
+  const bad = [];
+  const known = knownNames instanceof Set ? knownNames : new Set(knownNames || []);
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    let line = rawLine.trim();
+    if (!line || line.startsWith('//')) continue;
+    const c = line.indexOf('//');
+    if (c >= 0) line = line.slice(0, c).trim();          // strip inline comment
+    if (line.endsWith(';')) line = line.slice(0, -1).trim(); // strip trailing ';'
+    if (!line) continue;
+    const eq = line.indexOf('=');
+    if (eq < 0) { bad.push(rawLine.trim()); continue; }
+    const key = line.slice(0, eq).trim();
+    const p = parseIntFlexible(line.slice(eq + 1).trim());
+    if (!key || !p.ok || p.value == null) { bad.push(rawLine.trim()); continue; }
+    if (!known.has(key)) { unknown.push(key); continue; }
+    values[key] = p.value;
+  }
+  return { values, unknown, bad };
+}
 
 // Fixed-width stamp hex (0x%08X). Null → em dash. Mirrors ServerOffsetsTab.toHex.
 function toHex(n) {
@@ -33,14 +80,88 @@ function fmtRelative(sec) {
   return new Date(sec * 1000).toLocaleDateString();
 }
 
+// ── Quick paste ───────────────────────────────────────────────────────────────
+// Paste a C++ "field = 0x…;" block (straight from engine_variant_*.cpp / an IDA
+// note) and apply the recognised fields as overrides in one shot. Parsing is live
+// so the admin sees the apply/skip counts before committing. Only fields present in
+// `knownNames` (this server's offset catalog) are applied.
+// Props: { open, onClose, knownNames:Set, onApply(valuesMap) }
+function QuickPasteDialog({ open, onClose, knownNames, onApply }) {
+  const [text, setText] = useState('');
+
+  useEffect(() => { if (open) setText(''); }, [open]);
+
+  const result = useMemo(() => parseQuickOverrides(text, knownNames), [text, knownNames]);
+  const applyCount = Object.keys(result.values).length;
+  const touched = text.trim() !== '';
+
+  const handleApply = () => {
+    if (!applyCount) return;
+    onApply(result.values);
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Quick paste overrides</DialogTitle>
+      <DialogContent sx={{ pt: '8px !important' }}>
+        <DialogContentText sx={{ fontSize: '0.8rem', mb: 1.5 }}>
+          Paste lines like <code>off_entity_container = 0x1A58;</code> — one field per line.
+          A trailing <code>;</code> and <code>// comments</code> are ignored; values accept{' '}
+          <code>0x…</code> or decimal. Only fields in this server's offset catalog are applied.
+        </DialogContentText>
+        <TextField
+          multiline
+          minRows={8}
+          maxRows={20}
+          fullWidth
+          autoFocus
+          value={text}
+          placeholder={'off_entity_container  = 0x1A58;\noff_my_slot_item      = 0x1B30;\noff_my_character_info = 0x3CF80; // IDA note'}
+          onChange={(e) => setText(e.target.value)}
+          inputProps={{ style: { fontFamily: 'monospace', fontSize: '0.78rem' }, spellCheck: false }}
+        />
+        {touched && (
+          <Stack spacing={0.25} sx={{ mt: 1.5 }}>
+            <Typography variant="caption" color={applyCount ? 'success.main' : 'text.secondary'}>
+              {applyCount} field(s) will be applied.
+            </Typography>
+            {result.unknown.length > 0 && (
+              <Typography variant="caption" color="warning.main">
+                Not in catalog — skipped: {[...new Set(result.unknown)].join(', ')}
+              </Typography>
+            )}
+            {result.bad.length > 0 && (
+              <Typography variant="caption" color="error.main">
+                Couldn't parse {result.bad.length} line(s) — check they read <code>name = value</code>.
+              </Typography>
+            )}
+          </Stack>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          variant="contained"
+          startIcon={<ContentPasteGoIcon />}
+          onClick={handleApply}
+          disabled={!applyCount}
+        >
+          {applyCount ? `Apply ${applyCount}` : 'Apply'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 // ── Per-build value editor ────────────────────────────────────────────────────
 // Opens ONE build's per-build overrides. The Base column is the build's INHERITED
 // effective (per the getServerBuildOffsets effective[] — general override ?? template
 // base), the Override column is the per-build delta. Reuses OffsetFieldTable, whose
 // "Effective" column then resolves per-build override ?? inherited-base. Save REPLACES
 // the per-build overrides; a field left empty drops that per-build delta.
-// Props: { open, onClose, serverId, build, onSaved }
-function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
+// Props: { open, onClose, serverId, build, onSaved, onCopyToNew }
+function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved, onCopyToNew }) {
   const { showSnackbar } = useSnackbar();
   const buildId = build?.id;
 
@@ -50,6 +171,14 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
   const [overrides, setOverrides] = useState({}); // field_name -> rawString
   const [dirty, setDirty]     = useState(false);
   const [saving, setSaving]   = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+
+  // The set of numeric catalog field names paste/import validate against.
+  const knownNames = useMemo(
+    () => new Set((data?.catalog || []).map((c) => c.field_name)),
+    [data],
+  );
 
   // Seed the working copy from a freshly-loaded payload.
   const seedFrom = useCallback((payload) => {
@@ -82,6 +211,8 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
   }, [serverId, buildId, seedFrom]);
 
   useEffect(() => { if (open) load(); }, [open, load]);
+  // Don't leave the paste sub-dialog open across a close/reopen of the editor.
+  useEffect(() => { if (!open) setPasteOpen(false); }, [open]);
 
   const onFieldChange = useCallback((fieldName, raw) => {
     setOverrides((prev) => ({ ...prev, [fieldName]: raw }));
@@ -89,6 +220,75 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
   }, []);
 
   const invalid = hasInvalidOverride(overrides);
+  // How many per-build deltas a "Copy to new build" would carry (drops empty + invalid).
+  const fieldCount = useMemo(() => Object.keys(collectFields(overrides)).length, [overrides]);
+
+  // Merge a paste result into the working copy (normalised to lowercase 0x hex, so it
+  // reads like every other row) and mark dirty.
+  const applyQuickOverrides = useCallback((values) => {
+    const n = Object.keys(values).length;
+    if (!n) return;
+    setOverrides((prev) => {
+      const next = { ...prev };
+      for (const [k, v] of Object.entries(values)) next[k] = '0x' + (Number(v) >>> 0).toString(16);
+      return next;
+    });
+    setDirty(true);
+    showSnackbar(`Applied ${n} override(s) from paste — review, then Save.`);
+  }, [showSnackbar]);
+
+  // Trigger a browser download of `text` as `name` (application/json).
+  const downloadJson = (name, text) => {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // Download this build's EFFECTIVE profile as an offset_overrides.json a dev drops
+  // into %APPDATA%/<DATA_DIR_NAME>/ to bootstrap a Debug bot on this Engine.dll. The
+  // server merges the general effective set with the WORKING per-build overrides sent
+  // here (unsaved edits included), so it's WYSIWYG and can't mis-handle VAs the way a
+  // client-side reconstruction would (compiled-Stock fallbacks stay excluded).
+  const handleExportDevFile = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const dev = await adminApi.getServerBuildDevFile(serverId, buildId, collectFields(overrides));
+      downloadJson('offset_overrides.json', JSON.stringify(dev, null, 2));
+      showSnackbar(`Exported offset_overrides.json — ${Object.keys(dev?.fields || {}).length} effective field(s).`);
+    } catch (err) {
+      showSnackbar(errMsg(err, 'Export failed'), 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  // Download JUST this build's per-build deltas as the bot's build_overrides.json
+  // shape ({ kind:"rabbit-build-overrides", builds:[…] }) — round-trips through the
+  // "Import overrides" button and matches the Dev > Exporter format. Client-side only
+  // (the deltas are the working copy); empty + invalid entries are dropped.
+  const handleExportOverrides = () => {
+    const fields = collectFields(overrides);
+    const stamp = data?.stamp ?? build?.stamp ?? null;
+    const outBuild = { stamp, size: data?.size ?? build?.size ?? null, fields };
+    const lbl = (data?.label ?? build?.label) || '';
+    if (lbl) outBuild.label = lbl;
+    const out = { kind: 'rabbit-build-overrides', builds: [outBuild] };
+    const name = `build_overrides_${toHex(stamp)}.json`;
+    downloadJson(name, JSON.stringify(out, null, 2));
+    showSnackbar(`Exported ${Object.keys(fields).length} override(s) — ${name}`);
+  };
+
+  // Hand the current values up to the parent, which opens the Add-build flow seeded
+  // with them (new Engine.dll stamp, same deltas — tweak the few that moved).
+  const handleCopyToNew = () => {
+    onCopyToNew?.(collectFields(overrides));
+  };
 
   // The Base column = this build's inherited effective (general ?? template base).
   // OffsetFieldTable reads base from effective[].base_value first, then catalog.
@@ -141,6 +341,55 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
               deltas that move per game patch. Saving REPLACES the per-build overrides; a field left
               empty drops its per-build delta.
             </Typography>
+            <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: 'wrap', rowGap: 1 }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<ContentPasteIcon fontSize="small" />}
+                onClick={() => setPasteOpen(true)}
+              >
+                Quick paste
+              </Button>
+              <Tooltip title={invalid ? 'Fix invalid values first' : (fieldCount ? '' : 'Set at least one override first')}>
+                <span>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<ContentCopyIcon fontSize="small" />}
+                    onClick={handleCopyToNew}
+                    disabled={invalid || fieldCount === 0}
+                  >
+                    Copy to new build…
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={invalid ? 'Fix invalid values first' : 'offset_overrides.json — this build\'s full effective set; drop into %APPDATA% for a Debug bot'}>
+                <span>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<FileDownloadOutlinedIcon fontSize="small" />}
+                    onClick={handleExportDevFile}
+                    disabled={invalid || exporting}
+                  >
+                    {exporting ? 'Exporting…' : 'Export dev .json'}
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={invalid ? 'Fix invalid values first' : (fieldCount ? 'build_overrides.json — just this build\'s per-build deltas; round-trips through Import overrides' : 'Set at least one override first')}>
+                <span>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<FileDownloadOutlinedIcon fontSize="small" />}
+                    onClick={handleExportOverrides}
+                    disabled={invalid || fieldCount === 0}
+                  >
+                    Export overrides
+                  </Button>
+                </span>
+              </Tooltip>
+            </Stack>
             <OffsetFieldTable
               catalog={catalog}
               effective={effective}
@@ -160,6 +409,13 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
           {saving ? 'Saving…' : 'Save overrides'}
         </Button>
       </DialogActions>
+
+      <QuickPasteDialog
+        open={pasteOpen}
+        onClose={() => setPasteOpen(false)}
+        knownNames={knownNames}
+        onApply={applyQuickOverrides}
+      />
     </Dialog>
   );
 }
@@ -167,7 +423,7 @@ function BuildOffsetsDialog({ open, onClose, serverId, build, onSaved }) {
 // ── Add-build dialog ──────────────────────────────────────────────────────────
 // Creates a build row from an Engine.dll stamp + size (hex-or-decimal) + optional
 // label. Both stamp and size are required and parsed via parseIntFlexible.
-function AddBuildDialog({ open, onClose, serverId, onCreated }) {
+function AddBuildDialog({ open, onClose, serverId, onCreated, seedOverrides }) {
   const { showSnackbar } = useSnackbar();
   const [stampStr, setStampStr] = useState('');
   const [sizeStr, setSizeStr]   = useState('');
@@ -177,6 +433,11 @@ function AddBuildDialog({ open, onClose, serverId, onCreated }) {
   useEffect(() => {
     if (open) { setStampStr(''); setSizeStr(''); setLabel(''); setSaving(false); }
   }, [open]);
+
+  // Copy mode: this build is created pre-filled with another build's override values
+  // (a new Engine.dll stamp, same deltas). seedCount is frozen for the dialog's life.
+  const seedCount = useMemo(() => Object.keys(seedOverrides || {}).length, [seedOverrides]);
+  const copyMode = seedCount > 0;
 
   const stampParsed = parseIntFlexible(stampStr);
   const sizeParsed  = parseIntFlexible(sizeStr);
@@ -190,9 +451,16 @@ function AddBuildDialog({ open, onClose, serverId, onCreated }) {
       const body = { stamp: stampParsed.value, size: sizeParsed.value };
       const nm = label.trim();
       if (nm) body.label = nm;
-      await adminApi.createServerBuild(serverId, body);
-      showSnackbar('Build added');
-      onCreated?.();
+      const created = await adminApi.createServerBuild(serverId, body);
+      // Copy the seeded overrides onto the freshly-created build (REPLACE-ALL, same as
+      // the per-build Save). Field names come from an existing build so they're already
+      // catalog-valid.
+      if (copyMode && created?.id != null) {
+        const outOverrides = Object.entries(seedOverrides).map(([field_name, value]) => ({ field_name, value }));
+        await adminApi.putServerBuildOffsets(serverId, created.id, { overrides: outOverrides });
+      }
+      showSnackbar(copyMode ? `Build added with ${seedCount} copied override(s) — re-sign to apply.` : 'Build added');
+      onCreated?.(created, copyMode);
       onClose();
     } catch (err) {
       showSnackbar(errMsg(err, 'Create failed'), 'error');
@@ -203,11 +471,15 @@ function AddBuildDialog({ open, onClose, serverId, onCreated }) {
 
   return (
     <Dialog open={open} onClose={() => !saving && onClose()} maxWidth="xs" fullWidth>
-      <DialogTitle>Add build</DialogTitle>
+      <DialogTitle>{copyMode ? 'Copy to new build' : 'Add build'}</DialogTitle>
       <DialogContent sx={{ pt: '8px !important' }}>
         <DialogContentText sx={{ fontSize: '0.8rem', mb: 2 }}>
           One build = one Engine.dll (a game patch). Enter its PE fingerprint — export it
           from the bot's <strong>Dev &gt; Exporter</strong> tab. Values accept <code>0x…</code> or decimal.
+          {copyMode && (
+            <> <strong>{seedCount} override(s)</strong> will be copied into the new build — edit the few
+            that moved after it opens.</>
+          )}
         </DialogContentText>
         <Stack spacing={2}>
           <TextField
@@ -251,7 +523,7 @@ function AddBuildDialog({ open, onClose, serverId, onCreated }) {
       <DialogActions>
         <Button onClick={onClose} disabled={saving}>Cancel</Button>
         <Button variant="contained" onClick={handleCreate} disabled={!canCreate || saving}>
-          {saving ? 'Adding…' : 'Add build'}
+          {saving ? (copyMode ? 'Copying…' : 'Adding…') : (copyMode ? 'Create & copy' : 'Add build')}
         </Button>
       </DialogActions>
     </Dialog>
@@ -356,6 +628,7 @@ export default function BuildsSection({ serverId, serverName }) {
   const [error, setError] = useState(null);
 
   const [addOpen, setAddOpen]       = useState(false);
+  const [copySeed, setCopySeed]     = useState(null);   // { overrides } → Add-build in copy mode
   const [editTarget, setEditTarget] = useState(null);   // build open in the value editor
   const [signTarget, setSignTarget] = useState(null);   // { build } | { all:true } for sign dialog
   const [delTarget, setDelTarget]   = useState(null);   // build pending delete
@@ -551,12 +824,20 @@ export default function BuildsSection({ serverId, serverName }) {
         </TableContainer>
       )}
 
-      {/* Add build */}
+      {/* Add build — plain, or seeded from another build ("Copy to new build") */}
       <AddBuildDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
+        open={addOpen || !!copySeed}
+        onClose={() => { setAddOpen(false); setCopySeed(null); }}
         serverId={serverId}
-        onCreated={load}
+        seedOverrides={copySeed?.overrides || null}
+        onCreated={(created, wasCopy) => {
+          setAddOpen(false);
+          setCopySeed(null);
+          load();
+          // After a copy, jump straight into the new build's editor so the admin can
+          // change the few offsets that moved between patches.
+          if (wasCopy && created?.id != null) setEditTarget(created);
+        }}
       />
 
       {/* Per-build value editor */}
@@ -566,6 +847,7 @@ export default function BuildsSection({ serverId, serverName }) {
         serverId={serverId}
         build={editTarget}
         onSaved={load}
+        onCopyToNew={(overrides) => { setEditTarget(null); setCopySeed({ overrides }); }}
       />
 
       {/* Sign one build OR re-sign all */}

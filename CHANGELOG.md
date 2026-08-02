@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.19.0] — Per-Build-Overrides: Quick-Paste, Klonen & Export
+
+### Added
+
+- **„Quick paste" im Per-Build-Editor** (`BuildsSection`): einen C++-Block der Form
+  `off_entity_container = 0x1A58;` einfügen (direkt aus `engine_variant_*.cpp` oder
+  einer IDA-Notiz) und die erkannten Felder in einem Rutsch als Overrides setzen.
+  Trailing `;` und `// Kommentare` werden gestrippt, Werte akzeptieren `0x…` oder
+  dezimal. Eine Live-Vorschau zeigt vor dem Anwenden, wie viele Felder gesetzt
+  werden, welche Keys **nicht im Offset-Katalog** sind (übersprungen) und welche
+  Zeilen sich nicht parsen lassen — nur Katalogfelder werden übernommen.
+- **„Copy to new build"** klont die aktuellen Werte in einen **neuen** Build (neuer
+  Engine.dll-Stamp): Stamp/Size/Label des neuen Patches eingeben, die Deltas werden
+  auf den frisch angelegten Build geschrieben und dessen Editor öffnet sich sofort —
+  so ändert man nach einem Game-Patch nur die paar Offsets, die sich bewegt haben,
+  statt jeden Stamp von Hand anzulegen und Feld für Feld neu zu tippen.
+- **`POST /servers/:id/builds/:bid/offset-dev-file`** (nur super_admin) liefert das
+  **effektive** Offset-Profil dieses Builds als `offset_overrides.json`
+  (General-Ebene gemerged mit den Per-Build-Deltas, Per-Build gewinnt — dieselbe
+  Merge wie beim Signieren). Der Merge läuft **serverseitig**, damit er nicht vom
+  signierten Blob abweicht und kompilierte Stock-Fallbacks (v. a. VAs) korrekt
+  ausgeschlossen bleiben; die **aktuellen, auch ungespeicherten** Editor-Werte
+  werden mitgeschickt (WYSIWYG). Der Button **„Export dev .json"** lädt die Datei —
+  ein Dev legt sie in `%APPDATA%/<DATA_DIR_NAME>/` ab, um einen Debug-Bot auf genau
+  dieser Engine.dll zu bootstrappen.
+- **„Export overrides"-Button** lädt **nur die Per-Build-Deltas** dieses Builds als
+  `build_overrides.json` (`{ kind:"rabbit-build-overrides", builds:[…] }`) — rein
+  clientseitig, im Dev > Exporter-Format und damit über den „Import overrides"-Button
+  wieder einlesbar (Round-Trip).
+- **„Only overrides"-Umschalter** in der Offset-Feldtabelle (`OffsetFieldTable`)
+  blendet auf Felder mit gesetztem Override ein — greift sowohl im Per-Build-Editor
+  als auch bei den allgemeinen Server-Overrides.
+
+Keine Migration nötig (Endpoint berechnet nur, persistiert nichts).
+
 ## [0.18.0] — Import der kompilierten Per-Build-Overrides des Bots
 
 ### Added

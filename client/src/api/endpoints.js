@@ -200,6 +200,10 @@ export const adminApi = {
   deleteServerBuild:      (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}`, { method: 'DELETE' }),
   getServerBuildOffsets:  (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`),
   putServerBuildOffsets:  (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
+  // Compute this build's UNSIGNED effective profile as an offset_overrides.json dev
+  // file (general effective + the passed WORKING per-build overrides, per-build wins).
+  // Pass the editor's current overrides so unsaved edits export as shown → { v, server_id, build_id, stamp, size, fields }.
+  getServerBuildDevFile:  (id, bid, overrides) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offset-dev-file`, { method: 'POST', body: JSON.stringify({ overrides: overrides || {} }) }),
   signServerBuild:        (id, bid, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
   signAllServerBuilds:    (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/sign-all`, { method: 'POST', body: JSON.stringify({ password }) }),
   // Bulk-import the bot's compiled per-build override table (build_overrides.json
