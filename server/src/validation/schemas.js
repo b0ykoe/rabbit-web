@@ -232,7 +232,12 @@ export const captchaEventSchema = z.object({
   slot_ids:     z.array(z.number().int().nonnegative()).max(8).optional(),
   zone_no:      z.number().int().min(0).max(65535).optional(),
   method:       z.string().max(16).optional(),             // id | text | none
-  outcome:      z.string().max(16).optional(),             // solved | unsolved | closed | superseded
+  // solved | closed | superseded | timeout | unconfirmed | unsolved.
+  // "unconfirmed" = the bot delivered an answer but never saw the server's close
+  // packet, so it is neither a confirmed solve nor an honest timeout. Kept as a
+  // free string on purpose: a value this side does not know yet must reach the
+  // database intact rather than being coerced into a specific wrong failure.
+  outcome:      z.string().max(16).optional(),
   raw_hex:      z.string().max(512).optional(),
 });
 
