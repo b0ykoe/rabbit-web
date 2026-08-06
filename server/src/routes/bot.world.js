@@ -275,6 +275,98 @@ router.get('/servers/:id/offset-blob',
     res.json(blob);
   });
 
+// ── GET /spawns ──────────────────────────────────────────────────────────────
+// Bot-facing DOWNLOAD of a server's aggregated spawn map — the INVERSE of POST
+// /spawns. Unlike ingest this is deliberately NOT gated on spawn_tracking: any
+// authenticated bot user may READ the community-aggregated data (consuming the
+// map is not contributing to it). Auth = validateSpawnIngest (bearer, since a GET
+// carries no body) + a resolved user; the route-level botWorldLimiter (index.js)
+// still applies.
+//
+//   Query: server_id=<int> (required), zone=<int> (optional — one zone, else all)
+//   200 → { server_id, cells: [ { zone_no, mob_id, mob_name, level, maxhp,
+//            cell_x, cell_z, y, hits, passes, instance_sum } … ] }
+//
+// Cells are the origin-relative 4 m grid the bot itself uploaded, so the bot
+// reconstructs world x/z from cell_x/cell_z via its own cell↔world mapping — no
+// zone_bounds dependency. channel is folded to 0 post-034, so it is not returned.
+router.get('/spawns',
+  validateSpawnIngest,
+  async (req, res) => {
+    const userId = await resolveUserId(req);
+    if (userId == null) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const serverId = parseInt(req.query.server_id, 10);
+    if (!Number.isFinite(serverId) || serverId < 0) {
+      return res.status(400).json({ error: 'Bad or missing server_id' });
+    }
+    const zoneRaw = typeof req.query.zone === 'string' ? req.query.zone.trim() : '';
+    const zoneNo  = /^\d+$/.test(zoneRaw) ? Number(zoneRaw) : null;
+
+    const srv = await db('game_servers').where('id', serverId).select('id').first();
+    if (!srv) {
+      return res.status(404).json({ error: 'Unknown server_id' });
+    }
+
+    // ── cheap version hash + known_hash short-circuit (offset-blob-style diff) ──
+    // Any ingest changes the cell COUNT, the newest last_seen_sec, or the summed
+    // counters — so an equal hash means "no new data since your last pull". The bot
+    // echoes its cached hash as ?known_hash= and we answer { unchanged } (tiny) on a
+    // match, so a login settles into ~one full pull + cheap periodic checks.
+    const knownHash = typeof req.query.known_hash === 'string' ? req.query.known_hash : '';
+    let vq = db('mob_spawn_cells').where('server_id', serverId);
+    if (zoneNo != null) vq = vq.where('zone_no', zoneNo);
+    const agg = await vq.select(
+      db.raw('COUNT(*) as n'),
+      db.raw('COALESCE(MAX(last_seen_sec), 0) as mx'),
+      db.raw('COALESCE(SUM(hits + passes + instance_sum), 0) as sm'),
+    ).first();
+    const hash = `${Number(agg && agg.n) || 0}.${Number(agg && agg.mx) || 0}.${Number(agg && agg.sm) || 0}`;
+    if (knownHash && knownHash === hash) {
+      return res.json({ server_id: serverId, unchanged: true, hash });
+    }
+
+    // All-time per-cell read, joined to mob_catalog for the representative
+    // level/maxhp/name. Ordered by hits so the defensive cap keeps the densest
+    // (most useful) cells if a server is enormous.
+    const CELL_CAP = 20000;
+    let q = db('mob_spawn_cells as c')
+      .where('c.server_id', serverId)
+      .leftJoin('mob_catalog as m', function joinCatalog() {
+        this.on('m.server_id', '=', 'c.server_id').andOn('m.mob_id', '=', 'c.mob_id');
+      })
+      .select(
+        'c.zone_no', 'c.mob_id', 'c.cell_x', 'c.cell_z', 'c.y_avg',
+        'c.hits', 'c.passes', 'c.instance_sum',
+        'm.name as mob_name', 'm.level_max as level', 'm.maxhp_max as maxhp',
+      )
+      .orderBy('c.hits', 'desc')
+      .limit(CELL_CAP);
+    if (zoneNo != null) q = q.where('c.zone_no', zoneNo);
+
+    const rows = await q;
+
+    res.json({
+      server_id: serverId,
+      hash,
+      cells: rows.map((r) => ({
+        zone_no:      r.zone_no,
+        mob_id:       r.mob_id,
+        mob_name:     r.mob_name || null,
+        level:        r.level == null ? null : Number(r.level),
+        maxhp:        r.maxhp == null ? null : Number(r.maxhp),
+        cell_x:       r.cell_x,
+        cell_z:       r.cell_z,
+        y:            Number(r.y_avg),
+        hits:         Number(r.hits),
+        passes:       Number(r.passes),
+        instance_sum: Number(r.instance_sum),
+      })),
+    });
+  });
+
 // ── POST /spawns ─────────────────────────────────────────────────────────────
 router.post('/spawns',
   validateSpawnIngest,
