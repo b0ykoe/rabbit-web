@@ -337,10 +337,16 @@ router.get('/spawns',
       .leftJoin('mob_catalog as m', function joinCatalog() {
         this.on('m.server_id', '=', 'c.server_id').andOn('m.mob_id', '=', 'c.mob_id');
       })
+      // Reference names (super-admin-imported) are authoritative — the web map uses
+      // them; fall back to the per-sighting catalog name only when there is none.
+      .leftJoin('mob_names as n', function joinNames() {
+        this.on('n.server_id', '=', 'c.server_id').andOn('n.mob_id', '=', 'c.mob_id');
+      })
       .select(
         'c.zone_no', 'c.mob_id', 'c.cell_x', 'c.cell_z', 'c.y_avg',
-        'c.hits', 'c.passes', 'c.instance_sum',
-        'm.name as mob_name', 'm.level_max as level', 'm.maxhp_max as maxhp',
+        'c.hits', 'c.passes', 'c.instance_sum', 'c.last_seen_sec',
+        db.raw('COALESCE(n.name, m.name) as mob_name'),
+        'm.level_max as level', 'm.maxhp_max as maxhp',
       )
       .orderBy('c.hits', 'desc')
       .limit(CELL_CAP);
@@ -363,6 +369,7 @@ router.get('/spawns',
         hits:         Number(r.hits),
         passes:       Number(r.passes),
         instance_sum: Number(r.instance_sum),
+        last_seen:    r.last_seen_sec == null ? 0 : Number(r.last_seen_sec),
       })),
     });
   });
