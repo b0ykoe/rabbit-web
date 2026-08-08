@@ -259,6 +259,7 @@ export default function ServerDataTab({ server, overview, loading }) {
               (r.user || '').toLowerCase().includes(n)
               || (r.method || '').toLowerCase().includes(n)
               || (r.outcome || '').toLowerCase().includes(n)
+              || (r.source || '').toLowerCase().includes(n)
               || String(r.zone_no ?? '').includes(n)}
             columns={[
               { key: 'created_sec', label: 'When', align: 'right', render: (r) => (
@@ -271,6 +272,15 @@ export default function ServerDataTab({ server, overview, loading }) {
                 r.zone_no == null ? '—' : <Box component="span" sx={{ fontFamily: 'monospace' }}>#{r.zone_no}</Box>
               ) },
               { key: 'method', label: 'Method', render: (r) => r.method || '—' },
+              { key: 'source', label: 'Source', render: (r) => {
+                if (!r.source) return <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>;
+                // packet = ids decoded from the wire; ui = read back from the
+                // captcha window (poll); test = a synthetic bot upload.
+                const color = r.source === 'packet' ? 'success.main'
+                            : r.source === 'ui'     ? 'info.main'
+                            : 'text.secondary';
+                return <Box component="span" sx={{ color, fontFamily: 'monospace' }}>{r.source}</Box>;
+              } },
               { key: 'outcome', label: 'Outcome', render: (r) => (
                 <Box component="span" sx={{
                   color: r.outcome === 'solved' ? 'success.main'

@@ -239,6 +239,7 @@ export const captchaEventSchema = z.object({
   // database intact rather than being coerced into a specific wrong failure.
   outcome:      z.string().max(16).optional(),
   raw_hex:      z.string().max(512).optional(),
+  source:       z.string().max(16).optional(),             // packet | ui | test
 });
 
 export const captchaIngestSchema = z.object({

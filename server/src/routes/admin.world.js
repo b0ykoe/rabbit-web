@@ -1665,6 +1665,7 @@ router.get('/servers/:id/captcha', requireSuperAdmin, async (req, res) => {
     slot_ids: safeArr(r.slot_ids),
     method: r.method,
     outcome: r.outcome,
+    source: r.source ?? null,   // "packet" | "ui" | "test" | null (pre-044)
     raw_hex: r.raw_hex,
     created_sec: r.created_sec,
   }));

@@ -756,6 +756,7 @@ router.post('/captcha',
         method:       (e.method  || '').slice(0, 16),
         outcome:      (e.outcome || 'unsolved').slice(0, 16),
         raw_hex:      (e.raw_hex || '').slice(0, 512),
+        source:       e.source ? String(e.source).slice(0, 16) : null,
         created_sec:  now,
       };
     });
