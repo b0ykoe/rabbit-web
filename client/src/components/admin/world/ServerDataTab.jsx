@@ -281,8 +281,12 @@ export default function ServerDataTab({ server, overview, loading }) {
               { key: 'method', label: 'Method', render: (r) => r.method || '—' },
               { key: 'source', label: 'Source', render: (r) => {
                 if (!r.source) return <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>;
+                // test = a synthetic bot self-test upload → a distinct badge so it
+                // is never mistaken for a real captcha.
+                if (r.source === 'test')
+                  return <Chip size="small" color="warning" variant="outlined" label="TEST" />;
                 // packet = ids decoded from the wire; ui = read back from the
-                // captcha window (poll); test = a synthetic bot upload.
+                // captcha window (poll).
                 const color = r.source === 'packet' ? 'success.main'
                             : r.source === 'ui'     ? 'info.main'
                             : 'text.secondary';
@@ -302,6 +306,27 @@ export default function ServerDataTab({ server, overview, loading }) {
                   {r.chosen_slot != null && r.chosen_slot >= 0 ? ` → slot ${r.chosen_slot}` : ''}
                 </Box>
               ) },
+              // The 8 choice item ids. slot_ids = packet-decoded (primary);
+              // ui_slot_ids = read back from the window (fallback), shown muted on
+              // a second line when present (e.g. the "packet + window" self-test).
+              { key: 'slot_ids', label: 'Slot IDs (packet / ui)', render: (r) => {
+                const pkt = Array.isArray(r.slot_ids) ? r.slot_ids : null;
+                const ui  = Array.isArray(r.ui_slot_ids) ? r.ui_slot_ids : null;
+                const hasPkt = !!(pkt && pkt.some((x) => x));   // any non-zero id
+                if (!hasPkt && !ui) return <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>;
+                return (
+                  <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.72rem' }}>
+                    <Box component="span" title={pkt ? pkt.join(', ') : ''}>
+                      {hasPkt ? `[${pkt.join(', ')}]` : '[0…]'}
+                    </Box>
+                    {ui && (
+                      <Box sx={{ color: 'text.disabled' }} title={ui.join(', ')}>
+                        ui: [{ui.join(', ')}]
+                      </Box>
+                    )}
+                  </Box>
+                );
+              } },
               { key: 'solve_ms', label: 'Answer', align: 'right', render: (r) => (
                 r.solve_ms == null
                   ? <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>

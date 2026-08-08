@@ -230,6 +230,7 @@ export const captchaEventSchema = z.object({
   correct_id:   z.number().int().nonnegative().optional(),
   chosen_slot:  z.number().int().optional(),               // -1 when none
   slot_ids:     z.array(z.number().int().nonnegative()).max(8).optional(),
+  ui_slot_ids:  z.array(z.number().int().nonnegative()).max(8).optional(),   // window-read fallback ids
   zone_no:      z.number().int().min(0).max(65535).optional(),
   method:       z.string().max(16).optional(),             // id | text | none
   // solved | closed | superseded | timeout | unconfirmed | unsolved.

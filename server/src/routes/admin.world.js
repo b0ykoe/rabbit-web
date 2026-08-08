@@ -1640,7 +1640,13 @@ router.get('/servers/:id/captcha', requireSuperAdmin, asyncHandler(async (req, r
   const [rows, agg] = await Promise.all([
     db('captcha_events').where('server_id', serverId)
       .orderBy('created_sec', 'desc').limit(limit),
-    db('captcha_events').where('server_id', serverId).select(
+    db('captcha_events').where('server_id', serverId)
+      // Exclude synthetic self-test rows (source='test') from the rollup so they
+      // don't inflate the solved rate / counts. NULL-safe: pre-044 rows have a
+      // NULL source and are real, so they stay counted. The events list below
+      // still shows test rows — this filter is summary-only.
+      .whereRaw("(source IS NULL OR source <> 'test')")
+      .select(
       db.raw('COUNT(*) as total'),
       db.raw("SUM(CASE WHEN outcome = 'solved' THEN 1 ELSE 0 END) as solved"),
       db.raw("SUM(CASE WHEN method = 'id'   THEN 1 ELSE 0 END) as by_id"),
@@ -1668,6 +1674,7 @@ router.get('/servers/:id/captcha', requireSuperAdmin, asyncHandler(async (req, r
     correct_id: r.correct_id,
     chosen_slot: r.chosen_slot,
     slot_ids: safeArr(r.slot_ids),
+    ui_slot_ids: safeArr(r.ui_slot_ids),   // window-read fallback (null pre-045)
     method: r.method,
     outcome: r.outcome,
     source: r.source ?? null,   // "packet" | "ui" | "test" | null (pre-044)
