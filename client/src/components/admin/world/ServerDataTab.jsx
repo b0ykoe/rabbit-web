@@ -130,7 +130,14 @@ export default function ServerDataTab({ server, overview, loading }) {
   const [capLoading, setCapLoading] = useState(false);
   useEffect(() => { setCaptcha(null); }, [serverId]);
   useEffect(() => {
-    if (sub !== 3 || serverId == null || captcha != null || capLoading) return;
+    // capLoading must NOT be in the guard OR the deps. It is set INSIDE this
+    // effect, so if it were a dependency the effect would immediately re-run;
+    // React fires the previous cleanup first, flipping `alive` to false BEFORE
+    // the in-flight fetch resolves — then neither setCaptcha nor
+    // setCapLoading(false) ever runs and the tab loads forever. `captcha != null`
+    // alone prevents a duplicate fetch: it stays null until the response lands
+    // and is reset to null (above) whenever the server changes.
+    if (sub !== 3 || serverId == null || captcha != null) return;
     let alive = true;
     setCapLoading(true);
     adminApi.getServerCaptcha(serverId, 500)
@@ -138,7 +145,7 @@ export default function ServerDataTab({ server, overview, loading }) {
       .catch(() => { if (alive) setCaptcha({ summary: {}, events: [] }); })
       .finally(() => { if (alive) setCapLoading(false); });
     return () => { alive = false; };
-  }, [sub, serverId, captcha, capLoading]);
+  }, [sub, serverId, captcha]);
 
   const counts = [mobs.length, npcs.length, zones.length, captcha?.summary?.total ?? null];
 

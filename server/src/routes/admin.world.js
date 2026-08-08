@@ -24,6 +24,7 @@ import db from '../db.js';
 import { config } from '../config.js';
 import { signToken, generateJti } from '../crypto/ed25519.js';
 import { requireSuperAdmin } from '../middleware/auth.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 import { recordAudit } from '../services/auditLog.js';
 import { generateKey } from '../services/licenseService.js';
 import { validate, ingestTokenMintSchema, serverCreateSchema, serverUpdateSchema, serverMergeSchema, variantCreateSchema, variantUpdateSchema } from '../validation/schemas.js';
@@ -1618,7 +1619,11 @@ function csvRow(values) {
 // Returns a summary rollup + the most recent events. Events whose upload carried
 // no selected server_id land with server_id NULL and are NOT shown here (they
 // belong to no server); a future "unassigned" bucket could surface them.
-router.get('/servers/:id/captcha', requireSuperAdmin, async (req, res) => {
+// asyncHandler-wrapped: a bare async handler that rejects (e.g. captcha_events
+// absent because migration 043 was not applied) would NOT reach the global error
+// handler in Express 4 — the request would hang and the admin tab would spin
+// forever. Wrapping routes the rejection to next(err) → a clean 500 instead.
+router.get('/servers/:id/captcha', requireSuperAdmin, asyncHandler(async (req, res) => {
   const serverId = parseInt(req.params.id, 10);
   if (!Number.isFinite(serverId) || serverId < 0) {
     return res.status(400).json({ error: 'Bad server id' });
@@ -1682,7 +1687,7 @@ router.get('/servers/:id/captcha', requireSuperAdmin, async (req, res) => {
     },
     events,
   });
-});
+}));
 
 // GET /api/admin/world/servers/:id/spawns.csv — stream the full spawn heat.
 router.get('/servers/:id/spawns.csv', requireSuperAdmin, async (req, res) => {
