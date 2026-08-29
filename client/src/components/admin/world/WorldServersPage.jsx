@@ -6,7 +6,6 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import KeyIcon from '@mui/icons-material/VpnKey';
 import ConfirmationNumberIcon from '@mui/icons-material/ConfirmationNumber';
-import TuneIcon from '@mui/icons-material/Tune';
 import { adminApi } from '../../../api/endpoints.js';
 import { useApi } from '../../../hooks/useApi.js';
 import ServerCard from './ServerCard.jsx';
@@ -53,12 +52,6 @@ export default function WorldServersPage() {
             onClick={() => setGrantOpen(true)}
           >
             Grant recording key
-          </Button>
-          <Button
-            size="small" variant="outlined" startIcon={<TuneIcon fontSize="small" />}
-            onClick={() => navigate('/admin/world/offsets')}
-          >
-            Offset signing
           </Button>
           <Button
             size="small" variant="text" startIcon={<ConfirmationNumberIcon fontSize="small" />}

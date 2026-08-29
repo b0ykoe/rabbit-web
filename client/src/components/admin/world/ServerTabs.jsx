@@ -8,7 +8,6 @@ export const SERVER_TABS = [
   { key: 'map',      label: 'Map' },
   { key: 'uploads',  label: 'Uploads' },
   { key: 'data',     label: 'Data' },
-  { key: 'offsets',  label: 'Offsets' },
   { key: 'settings', label: 'Settings' },
 ];
 

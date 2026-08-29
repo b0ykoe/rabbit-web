@@ -21,7 +21,6 @@ import AdminSettings from './components/admin/Settings.jsx';
 import WorldOutlet from './components/admin/world/WorldOutlet.jsx';
 import WorldServersPage from './components/admin/world/WorldServersPage.jsx';
 import IngestTokensPage from './components/admin/world/IngestTokensPage.jsx';
-import OffsetSigningPage from './components/admin/world/OffsetSigningPage.jsx';
 import WorldServerDetailPage from './components/admin/world/WorldServerDetailPage.jsx';
 
 // Portal
@@ -68,7 +67,6 @@ export default function AppRouter() {
         }>
           <Route index element={<WorldServersPage />} />
           <Route path="tokens" element={<IngestTokensPage />} />
-          <Route path="offsets" element={<OffsetSigningPage />} />
           <Route path="servers/:id" element={<WorldServerDetailPage />} />
           <Route path="servers/:id/:tab" element={<WorldServerDetailPage />} />
         </Route>

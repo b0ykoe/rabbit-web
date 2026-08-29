@@ -12,7 +12,6 @@ import ServerOverviewTab from './ServerOverviewTab.jsx';
 import UploadsTab from './UploadsTab.jsx';
 import MapTab from './MapTab.jsx';
 import ServerDataTab from './ServerDataTab.jsx';
-import ServerOffsetsTab from './ServerOffsetsTab.jsx';
 import CoverageStatusPill from './CoverageStatusPill.jsx';
 
 const TAB_KEYS = SERVER_TABS.map((t) => t.key);
@@ -101,8 +100,6 @@ export default function WorldServerDetailPage() {
         return <UploadsTab {...tabProps} onOpenTab={openTab} />;
       case 'data':
         return <ServerDataTab {...tabProps} />;
-      case 'offsets':
-        return <ServerOffsetsTab {...tabProps} />;
       case 'overview':
       default:
         return <ServerOverviewTab {...tabProps} onOpenTab={openTab} />;

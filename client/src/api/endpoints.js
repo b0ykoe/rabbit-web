@@ -158,63 +158,6 @@ export const adminApi = {
     return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/zones/${encodeURIComponent(zoneNo)}/bounds`, { method: 'POST', body: formData });
   },
 
-  // Signed offset-override system (super-admin only) — additive. A single Ed25519
-  // signing keypair (getOffsetKey reads its public half; generateOffsetKey mints a
-  // new one, password-gated) authenticates per-server offset payloads the bot then
-  // verifies. importOffsetCatalog uploads the bot-exported symbol catalog (multipart
-  // FormData, single field "file" — apiFetch skips the JSON Content-Type so the
-  // browser sets the multipart boundary; CSRF + credentials still apply).
-  // get/putServerOffsets read+write one server's offset overrides; signServerOffsets
-  // (password-gated) signs the current set so the bot accepts it.
-  getOffsetKey:        ()           => apiFetch('/api/admin/world/offset-key'),
-  generateOffsetKey:   (password)   => apiFetch('/api/admin/world/offset-key/generate', { method: 'POST', body: JSON.stringify({ password }) }),
-  importOffsetCatalog: (file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return apiFetch('/api/admin/world/offset-catalog/import', { method: 'POST', body: fd });
-  },
-  getServerOffsets:    (id)         => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`),
-  putServerOffsets:    (id, body)   => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
-  signServerOffsets:   (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offsets/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
-  getServerOffsetDevFile: (id)      => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/offset-dev-file`),
-
-  // Build templates (Phase 1) — named per-edition base value-sets a server forks.
-  getOffsetTemplates:      ()          => apiFetch('/api/admin/world/offset-templates'),
-  getOffsetTemplate:       (id)        => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`),
-  createOffsetTemplate:    (body)      => apiFetch('/api/admin/world/offset-templates', { method: 'POST', body: JSON.stringify(body) }),
-  updateOffsetTemplate:    (id, body)  => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteOffsetTemplate:    (id)        => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  putOffsetTemplateValues: (id, values) => apiFetch(`/api/admin/world/offset-templates/${encodeURIComponent(id)}/values`, { method: 'PUT', body: JSON.stringify({ values }) }),
-
-  // Per-build overrides (P4) — the PER-PATCH tier. Each build is one Engine.dll
-  // stamp for a server; its overrides are the deltas that shift per game patch and
-  // layer ABOVE the server's general overrides (effective = per-build > general >
-  // template). Each build carries its OWN signed blob keyed to its stamp/size, so a
-  // bot fetches the blob matching its Engine.dll. getServerBuilds lists a server's
-  // builds; get/putServerBuildOffsets read+write one build's per-build overrides
-  // (same shape as getServerOffsets minus fingerprint/templates); signServerBuild
-  // (password-gated) signs one build; signAllServerBuilds re-signs them all.
-  getServerBuilds:        (id)          => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds`),
-  createServerBuild:      (id, body)    => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds`, { method: 'POST', body: JSON.stringify(body) }),
-  updateServerBuild:      (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteServerBuild:      (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}`, { method: 'DELETE' }),
-  getServerBuildOffsets:  (id, bid)     => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`),
-  putServerBuildOffsets:  (id, bid, body) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offsets`, { method: 'PUT', body: JSON.stringify(body) }),
-  // Compute this build's UNSIGNED effective profile as an offset_overrides.json dev
-  // file (general effective + the passed WORKING per-build overrides, per-build wins).
-  // Pass the editor's current overrides so unsaved edits export as shown → { v, server_id, build_id, stamp, size, fields }.
-  getServerBuildDevFile:  (id, bid, overrides) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/offset-dev-file`, { method: 'POST', body: JSON.stringify({ overrides: overrides || {} }) }),
-  signServerBuild:        (id, bid, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/${encodeURIComponent(bid)}/sign`, { method: 'POST', body: JSON.stringify({ password }) }),
-  signAllServerBuilds:    (id, password) => apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/sign-all`, { method: 'POST', body: JSON.stringify({ password }) }),
-  // Bulk-import the bot's compiled per-build override table (build_overrides.json
-  // from Dev > Exporter). Multipart FormData (single field "file"), same pattern as
-  // importOffsetCatalog. Upserts server_builds + REPLACE-ALL per-build overrides and
-  // invalidates each touched build's signed blob → { ok, builds_written, overrides_written }.
-  importServerBuildOverrides: (id, file) => {
-    const fd = new FormData();
-    fd.append('file', file);
-    return apiFetch(`/api/admin/world/servers/${encodeURIComponent(id)}/builds/import`, { method: 'POST', body: fd });
-  },
 };
 
 // ── Portal ───────────────────────────────────────────────────────────────────

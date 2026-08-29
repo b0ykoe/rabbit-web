@@ -144,15 +144,10 @@ export const botHeartbeatSchema = z.object({
     sockets_active: z.number().int().nonnegative().default(0),
     sockets_total:  z.number().int().nonnegative().default(0),
   })).optional(),
-  // Offset push-refetch selector (change-driven offset sync). The bot advertises
-  // which (server, Engine build) it needs offsets for, so the heartbeat response
-  // can echo that exact blob's last-signed timestamp (offsets_updated_at) and the
-  // bot refetches immediately when an admin re-signs — instead of a blind poll.
-  // All optional — only sent once a server is resolved AND the spawn_tracking-gated
-  // offset sync is active. stamp/size are the Engine.dll PE fingerprint (uint32).
-  offsets_server_id: z.number().int().nonnegative().optional(),
-  engine_stamp:      z.number().int().nonnegative().optional(),
-  engine_size:       z.number().int().nonnegative().optional(),
+  // NOTE: the offset push-refetch fields (offsets_server_id / engine_stamp /
+  // engine_size) were removed with the signed offset-override system — offsets are
+  // now hard-coded in the bot. z.object() strips unknown keys, so an older bot that
+  // still sends them validates fine (the fields are simply ignored).
 });
 
 // ── Bot: Monster-map ingest (world) ──────────────────────────────────────────
@@ -380,116 +375,6 @@ export const variantUpdateSchema = z.object({
   d => d.display_name !== undefined || d.archived !== undefined || d.notes !== undefined,
   { message: 'Provide at least one field to update' },
 );
-
-// ── Admin: Offset overrides (world, 038 — Phase D) ───────────────────────────
-// The signed offset-override system. A server = base "Stock EP4" GameLayout +
-// a few field overrides, signed with a SEPARATE password-encrypted Ed25519 key
-// (NOT the always-hot bot-token key). See crypto/offsetSigning.js.
-//
-// POST /api/admin/world/offset-key/generate — mint the signing key. The
-// password wraps the private key at rest (scrypt+aes-256-gcm); min 8 chars.
-export const offsetKeyGenSchema = z.object({
-  password: z.string().min(8),
-});
-
-// PUT /api/admin/world/servers/:id/offsets — set the engine fingerprint
-// (stamp/size, both optional) + REPLACE the server's field overrides. Every
-// field_name is validated against offset_field_catalog in the route (400 else);
-// values are plain integers (an offset can be negative, so no nonnegative gate).
-// overrides capped at 600 (the whole GameLayout is well under that).
-export const offsetsPutSchema = z.object({
-  stamp:     z.coerce.number().int().nonnegative().optional(),
-  size:      z.coerce.number().int().nonnegative().optional(),
-  // Which build template this server forks (Phase 1). null clears it; omit to leave
-  // unchanged. A missing value on a field falls back to the template's base value.
-  offset_template_id: z.coerce.number().int().positive().nullable().optional(),
-  // value = numeric override (data|va slots). value_text = OPTIONAL string override
-  // for a kind:"name" slot (a mangled Engine.dll export name, P5). Optional so a
-  // numeric-only payload validates unchanged.
-  overrides: z.array(z.object({
-    field_name: z.string().min(1).max(64),
-    value:      z.coerce.number().int().optional(),
-    value_text: z.string().max(255).optional(),
-  })).max(600),
-});
-
-// POST /api/admin/world/servers/:id/offsets/sign — sign the current overrides
-// into a blob. password is required (min 1); a WRONG password fails cleanly (403)
-// in the route via the crypto module's typed auth error.
-export const offsetSignSchema = z.object({
-  password: z.string().min(1),
-});
-
-// ── Admin: Build templates (world, 039 — Phase 1) ────────────────────────────
-// A build template is a named per-edition base value-set (Stock EP4, Stock EP2, …)
-// that servers fork. name 1..64; notes ≤255.
-export const templateCreateSchema = z.object({
-  name:  z.string().min(1).max(64),
-  notes: z.string().max(255).nullable().optional(),
-});
-
-export const templateUpdateSchema = z.object({
-  name:  z.string().min(1).max(64).optional(),
-  notes: z.string().max(255).nullable().optional(),
-}).refine(
-  d => d.name !== undefined || d.notes !== undefined,
-  { message: 'Provide at least one field to update' },
-);
-
-// PUT /offset-templates/:id/values — REPLACE-ALL a template's base field values.
-// Each field_name is validated against offset_field_catalog in the route.
-export const templateValuesPutSchema = z.object({
-  values: z.array(z.object({
-    field_name: z.string().min(1).max(64),
-    value:      z.coerce.number().int(),
-  })).max(2000),
-});
-
-// ── Admin: Per-server builds (world, 040 — Phase P4, per-patch tier) ──────────
-// A server BUILD = a (server, Engine.dll stamp) row carrying a PER-BUILD override
-// layer over the general (038) layer + its own signed blob. Effective value =
-// per-build override ?? general override ?? template base. See admin.offsets.js.
-//
-// POST /servers/:id/builds — create a build for a stamp (409 on dup server+stamp).
-// stamp/size are PE fingerprints (nonnegative ints); label is an optional label.
-export const buildCreateSchema = z.object({
-  stamp: z.coerce.number().int().nonnegative(),
-  size:  z.coerce.number().int().nonnegative(),
-  label: z.string().max(64).optional(),
-});
-
-// PATCH /servers/:id/builds/:bid — edit the label only (null clears it).
-export const buildUpdateSchema = z.object({
-  label: z.string().max(64).nullable().optional(),
-}).refine(() => true);
-
-// PUT /servers/:id/builds/:bid/offsets — REPLACE-ALL this build's overrides.
-// Each field_name is validated against offset_field_catalog in the route; values
-// are plain integers (an offset can be negative). Capped at 600 like the general
-// PUT (the whole GameLayout is well under that).
-export const buildOverridesPutSchema = z.object({
-  // value = numeric per-build override. value_text = OPTIONAL string override for a
-  // kind:"name" slot (mangled Engine.dll export name, P5). Optional so a
-  // numeric-only payload validates unchanged.
-  overrides: z.array(z.object({
-    field_name: z.string().min(1).max(64),
-    value:      z.coerce.number().int().optional(),
-    value_text: z.string().max(255).optional(),
-  })).max(600),
-});
-
-// POST /servers/:id/builds/:bid/sign — sign this build's blob. password required
-// (min 1); a WRONG password fails cleanly (403) via the crypto module's typed
-// auth error.
-export const buildSignSchema = z.object({
-  password: z.string().min(1),
-});
-
-// POST /servers/:id/builds/sign-all — re-sign EVERY build of the server (+ the
-// server-level blob) with ONE password. Same shape as buildSignSchema.
-export const buildsSignAllSchema = z.object({
-  password: z.string().min(1),
-});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
