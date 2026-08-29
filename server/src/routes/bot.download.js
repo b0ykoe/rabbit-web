@@ -7,19 +7,43 @@ import { encryptFile } from '../crypto/aes.js';
 
 const router = Router();
 
-// GET /api/bot/version — active release versions, filtered by user's channels
+// GET /api/bot/version — active release versions, filtered by user's channels.
+// Shape (arch-aware, backward-compatible):
+//   { dll: { release: "1.17.34",                    // legacy arch=NULL row
+//            beta:    { x86: "1.17.35", x64: "1.17.35" } },  // arch-tagged rows
+//     loader: { release: "0.9.1" } }
+// Consumers that only read out[type][channel] as a version string still work for
+// arch-agnostic rows; loaders that know about arch read the sub-object.
 router.get('/version', validateBotUserToken, async (req, res) => {
   const channels = req.botUser.allowed_channels;
 
   const releases = await db('releases')
     .where('active', true)
     .whereIn('channel', channels)
-    .select('type', 'version', 'channel');
+    .select('type', 'version', 'channel', 'arch');
 
   const out = {};
   for (const r of releases) {
     if (!out[r.type]) out[r.type] = {};
-    out[r.type][r.channel] = r.version;
+    if (r.arch) {
+      // Arch-tagged row: nest under { x86, x64 }.
+      if (typeof out[r.type][r.channel] === 'string') {
+        // Prior arch=NULL row already recorded — promote it to the nested shape
+        // under an explicit 'any' key so nothing is lost.
+        out[r.type][r.channel] = { any: out[r.type][r.channel] };
+      } else if (out[r.type][r.channel] == null) {
+        out[r.type][r.channel] = {};
+      }
+      out[r.type][r.channel][r.arch] = r.version;
+    } else {
+      // arch=NULL (legacy) — keep the old string shape unless we already saw
+      // arch-tagged rows for this channel (then nest under 'any').
+      if (out[r.type][r.channel] && typeof out[r.type][r.channel] === 'object') {
+        out[r.type][r.channel].any = r.version;
+      } else {
+        out[r.type][r.channel] = r.version;
+      }
+    }
   }
   res.json(out);
 });
@@ -78,18 +102,57 @@ async function serveRelease(req, res, type) {
     return res.status(403).json({ error: 'No access to this channel' });
   }
 
+  // Optional target-arch hint (post-047). The loader passes 'x86' or 'x64' once
+  // it has confirmed the target game process is running so we can serve the
+  // matching build. Absent / malformed → null = "old loader that doesn't know
+  // about arch", handled by the fallback chain in pickReleaseForChannel below.
+  const arch = (req.body.arch === 'x86' || req.body.arch === 'x64')
+    ? req.body.arch
+    : null;
+
+  // Per-channel arch resolution (see migration 047):
+  //   1. arch given         → active row for that arch; else fall back to the
+  //                            arch=NULL legacy row so a channel that still ships
+  //                            a single arch-agnostic build stays reachable.
+  //   2. arch NOT given     → active arch=NULL row (legacy default); else 'x86'
+  //                            (the pre-x64 client default so old loaders that
+  //                            never send arch keep working after the admin
+  //                            switches to arch-tagged uploads).
+  //   3. no match           → null (surfaces as 503; we NEVER serve a wrong-arch
+  //                            DLL — that would insta-crash the client).
+  const pickReleaseForChannel = async (ch) => {
+    if (arch) {
+      return (
+        await db('releases').where({ type, channel: ch, active: true, arch }).first()
+        || await db('releases').where({ type, channel: ch, active: true, arch: null }).first()
+        || null
+      );
+    }
+    return (
+      await db('releases').where({ type, channel: ch, active: true, arch: null }).first()
+      || await db('releases').where({ type, channel: ch, active: true, arch: 'x86' }).first()
+      || null
+    );
+  };
+
   let release;
   if (channel) {
-    release = await db('releases').where({ type, channel, active: true }).first();
+    release = await pickReleaseForChannel(channel);
   } else {
-    // Fallback: prefer release > beta > alpha
-    release = await db('releases').where({ type, channel: 'release', active: true }).first()
-           || await db('releases').where({ type, channel: 'beta',    active: true }).first()
-           || await db('releases').where({ type, channel: 'alpha',   active: true }).first();
+    // Cross-channel fallback: prefer release > beta > alpha, arch resolution
+    // applied inside each probe.
+    release = (await pickReleaseForChannel('release'))
+           || (await pickReleaseForChannel('beta'))
+           || (await pickReleaseForChannel('alpha'));
   }
 
   if (!release || !fs.existsSync(release.file_path)) {
-    return res.status(503).json({ error: 'No active release available' });
+    // A precise 503 message helps the loader show why a specific arch couldn't
+    // be served (e.g. admin has only uploaded x86 so far but the client is x64).
+    const msg = arch
+      ? `No active ${arch} release available`
+      : 'No active release available';
+    return res.status(503).json({ error: msg });
   }
 
   const plaintext = fs.readFileSync(release.file_path);
@@ -107,6 +170,9 @@ async function serveRelease(req, res, type) {
     sha256:  release.sha256,
     version: release.version,
     channel: release.channel,
+    // 'x86' | 'x64' | null — echo what the server picked (may differ from what
+    // the client asked for when arch fell back to the arch=NULL legacy row).
+    arch:    release.arch || null,
     iv,
     data,
   });

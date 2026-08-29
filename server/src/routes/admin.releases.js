@@ -15,7 +15,7 @@ const router = Router();
 // GET /api/admin/releases — all releases grouped by type
 router.get('/', async (req, res) => {
   const releases = await db('releases').orderBy('created_at', 'desc')
-    .select('id', 'type', 'channel', 'version', 'sha256', 'md5', 'changelog', 'active', 'created_at');
+    .select('id', 'type', 'channel', 'version', 'arch', 'sha256', 'md5', 'changelog', 'active', 'created_at');
 
   const grouped = { dll: [], loader: [] };
   for (const r of releases) {
@@ -37,15 +37,26 @@ router.post('/', upload.single('file'), async (req, res) => {
     return res.status(422).json({ errors: result.error.flatten().fieldErrors });
   }
 
-  const { type, channel, version, changelog } = result.data;
+  const { type, channel, version, changelog, arch } = result.data;
+  // arch: 'x86' | 'x64' | null. null = "arch-agnostic single upload" — the legacy
+  // shape (pre-047) that any bot regardless of target arch will download when it
+  // does not request a specific arch. The uniqueness scope now includes arch so
+  // a single version can carry BOTH an x86 and an x64 row (see migration 047).
+  const archLabel = arch === null ? 'any' : arch;
 
-  const exists = await db('releases').where({ type, version, channel }).first();
+  const exists = await db('releases').where({ type, version, channel, arch }).first();
   if (exists) {
     fs.unlinkSync(req.file.path);
-    return res.status(422).json({ errors: { version: [`Version ${version} already exists for ${type}/${channel}`] } });
+    return res.status(422).json({ errors: { version: [`Version ${version} already exists for ${type}/${channel} (${archLabel})`] } });
   }
 
-  const dir = path.join(config.bot.privateDir, type, channel);
+  // Files land in a per-arch subdir when the upload is arch-specific so two
+  // rows with the same version but different arch cannot collide on disk.
+  // Arch-agnostic uploads keep the pre-047 layout (<type>/<channel>/<ver>.ext)
+  // so already-stored files stay reachable from their existing file_path.
+  const dir = arch
+    ? path.join(config.bot.privateDir, type, channel, arch)
+    : path.join(config.bot.privateDir, type, channel);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const ext      = type === 'dll' ? '.dll' : '.exe';
@@ -62,19 +73,22 @@ router.post('/', upload.single('file'), async (req, res) => {
   const dll_signature = await signBytes(fileBuffer, config.bot.ed25519PrivateKey);
 
   const [id] = await db('releases').insert({
-    type, channel, version, file_path: filePath, sha256, md5, dll_signature, changelog, active: false,
+    type, channel, version, arch, file_path: filePath, sha256, md5, dll_signature, changelog, active: false,
   });
 
-  // Deactivate others of same type + channel, activate this one
-  await db('releases').where({ type, channel }).whereNot('id', id).update({ active: false });
+  // Deactivate the OTHER active row of the same (type, channel, arch) — activation
+  // is per-arch so activating the x86 build does not disturb the x64 build (and
+  // vice versa). knex maps `where({arch: null})` to `arch IS NULL`, so a legacy
+  // NULL row's activation stays scoped to other NULL rows only.
+  await db('releases').where({ type, channel, arch }).whereNot('id', id).update({ active: false });
   await db('releases').where('id', id).update({ active: true });
 
   await recordAudit(db, req, {
     action: 'release.upload', subjectType: 'release', subjectId: id,
-    newValues: { type, channel, version, sha256, md5 },
+    newValues: { type, channel, version, arch, sha256, md5 },
   });
 
-  res.status(201).json({ id, type, channel, version, sha256, md5, message: `Release ${type}/${channel} v${version} uploaded and activated` });
+  res.status(201).json({ id, type, channel, version, arch, sha256, md5, message: `Release ${type}/${channel} v${version} (${archLabel}) uploaded and activated` });
 });
 
 // PATCH /api/admin/releases/:id — edit changelog + channel
@@ -123,18 +137,26 @@ router.patch('/:id/activate', async (req, res) => {
   const release = await db('releases').where('id', req.params.id).first();
   if (!release) return res.status(404).json({ error: 'Release not found' });
 
-  const previous = await db('releases').where({ type: release.type, channel: release.channel, active: true }).first();
+  // Activation is scoped to (type, channel, arch) — x86 and x64 rows within the
+  // same channel have INDEPENDENT active flags so activating one does not knock
+  // the other offline. A legacy arch=NULL row still gets its own scope.
+  const previous = await db('releases')
+    .where({ type: release.type, channel: release.channel, arch: release.arch, active: true })
+    .first();
 
-  await db('releases').where({ type: release.type, channel: release.channel }).update({ active: false });
+  await db('releases')
+    .where({ type: release.type, channel: release.channel, arch: release.arch })
+    .update({ active: false });
   await db('releases').where('id', release.id).update({ active: true });
 
+  const archLabel = release.arch || 'any';
   await recordAudit(db, req, {
     action: 'release.activate', subjectType: 'release', subjectId: release.id,
     oldValues: { previous_version: previous?.version },
-    newValues: { type: release.type, channel: release.channel, version: release.version },
+    newValues: { type: release.type, channel: release.channel, arch: release.arch, version: release.version },
   });
 
-  res.json({ message: `Activated ${release.type}/${release.channel} v${release.version}` });
+  res.json({ message: `Activated ${release.type}/${release.channel} v${release.version} (${archLabel})` });
 });
 
 // PATCH /api/admin/releases/:id/deactivate �� deactivate (no active version for this type+channel)
@@ -145,13 +167,14 @@ router.patch('/:id/deactivate', async (req, res) => {
 
   await db('releases').where('id', release.id).update({ active: false });
 
+  const archLabel = release.arch || 'any';
   await recordAudit(db, req, {
     action: 'release.deactivate', subjectType: 'release', subjectId: release.id,
     oldValues: { active: true },
-    newValues: { active: false, type: release.type, channel: release.channel, version: release.version },
+    newValues: { active: false, type: release.type, channel: release.channel, arch: release.arch, version: release.version },
   });
 
-  res.json({ message: `Deactivated ${release.type}/${release.channel} v${release.version}` });
+  res.json({ message: `Deactivated ${release.type}/${release.channel} v${release.version} (${archLabel})` });
 });
 
 export default router;

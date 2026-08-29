@@ -6,6 +6,7 @@ export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
   const [type, setType]           = useState('dll');
   const [channel, setChannel]     = useState('release');
   const [version, setVersion]     = useState('');
+  const [arch, setArch]           = useState('any');   // 'any' | 'x86' | 'x64' — 'any' = arch-agnostic (legacy single upload)
   const [changelog, setChangelog] = useState('');
   const [file, setFile]           = useState(null);
   const [error, setError]         = useState('');
@@ -21,10 +22,12 @@ export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
       formData.append('type', type);
       formData.append('channel', channel);
       formData.append('version', version);
+      // 'any' means arch-agnostic — send it so the server transforms to NULL.
+      formData.append('arch', arch);
       formData.append('changelog', changelog);
       formData.append('file', file);
       await onSubmit(formData);
-      setType('dll'); setChannel('release'); setVersion(''); setChangelog(''); setFile(null);
+      setType('dll'); setChannel('release'); setVersion(''); setArch('any'); setChangelog(''); setFile(null);
       onClose();
     } catch (err) {
       const errors = err.data?.errors;
@@ -48,6 +51,18 @@ export default function ReleaseUploadDialog({ open, onClose, onSubmit }) {
             <MenuItem value="release">Release</MenuItem>
             <MenuItem value="beta">Beta</MenuItem>
             <MenuItem value="alpha">Alpha</MenuItem>
+          </TextField>
+          <TextField
+            label="Architecture"
+            select
+            size="small"
+            value={arch}
+            onChange={(e) => setArch(e.target.value)}
+            helperText="'Any' = one file for all clients (legacy). Upload once as x86 AND once as x64 to serve arch-specific builds — the loader picks the matching one."
+          >
+            <MenuItem value="any">Any (single-arch upload)</MenuItem>
+            <MenuItem value="x86">x86 (32-bit client)</MenuItem>
+            <MenuItem value="x64">x64 (64-bit client)</MenuItem>
           </TextField>
           <TextField
             label="Version"

@@ -68,6 +68,7 @@ export default function Releases() {
                   <tr>
                     <th align="left">Version</th>
                     <th align="left">Channel</th>
+                    <th align="left">Arch</th>
                     <th align="left">Hashes</th>
                     <th align="left">Status</th>
                     <th align="left">Date</th>
@@ -79,6 +80,16 @@ export default function Releases() {
                     <tr key={r.id}>
                       <td><Typography fontWeight={600} variant="body2">v{r.version}</Typography></td>
                       <td><Chip label={r.channel || 'release'} size="small" color={getChannelColor(r.channel)} variant="outlined" sx={{ fontSize: '0.65rem' }} /></td>
+                      <td>
+                        {/* arch: 'x86' | 'x64' | null (arch-agnostic / legacy) */}
+                        <Chip
+                          label={r.arch || 'any'}
+                          size="small"
+                          color={r.arch === 'x64' ? 'primary' : r.arch === 'x86' ? 'info' : 'default'}
+                          variant={r.arch ? 'filled' : 'outlined'}
+                          sx={{ fontSize: '0.65rem' }}
+                        />
+                      </td>
                       <td>
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

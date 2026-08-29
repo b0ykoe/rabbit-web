@@ -74,11 +74,23 @@ export const assignLicenseSchema = z.object({
 
 // ── Admin: Releases ──────────────────────────────────────────────────────────
 
+// arch is OPTIONAL (nullable in DB): omit / empty string / 'any' → NULL, meaning
+// "arch-agnostic single file for this version" (pre-047 behavior). 'x86' or 'x64'
+// pins the row to a specific architecture, so the same version+channel can be
+// uploaded once per arch (see migration 047). Accepts the empty string / 'any'
+// sentinel so an HTML form that doesn't pick an arch (default) resolves to NULL
+// without a validation error.
+const archField = z
+  .union([z.literal('x86'), z.literal('x64'), z.literal('any'), z.literal('')])
+  .optional()
+  .transform((v) => (v === 'x86' || v === 'x64' ? v : null));
+
 export const uploadReleaseSchema = z.object({
   type:      z.enum(['dll', 'loader']),
   channel:   z.enum(['release', 'beta', 'alpha']).default('release'),
   version:   z.string().regex(/^\d+\.\d+(\.\d+)?(-[a-zA-Z0-9_.]+)?$/),
   changelog: z.string().min(1),
+  arch:      archField,
 });
 
 export const updateReleaseSchema = z.object({
