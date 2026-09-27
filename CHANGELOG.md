@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.20.0] — Serverbezogene MapViewer-Navigationscaches
+
+### Added
+
+- Super-Admins können auf der Portal-Startseite einen vollständigen
+  `.mvnav`-Ordner auswählen, einem benannten Spielserver wie Nemesis zuordnen
+  und mit Dateianzahl, Gesamtgröße und Upload-Fortschritt veröffentlichen.
+- Migration `048_navigation_cache_packages` speichert pro Spielserver ein
+  aktives Paket samt unveränderlichem Dateimanifest, SHA-256-Werten,
+  Source-Fingerprints und Upload-Metadaten.
+- Der Loader erhält authentifizierte Katalog-, Manifest- und Streaming-Endpunkte
+  für serverbezogene Cachepakete.
+
+### Security / Integrity
+
+- Nur Super-Admins dürfen Pakete veröffentlichen. Der Server validiert für jede
+  Datei Magic, Schema, Endian-Markierung, Zonen-/Fingerprint-Dateiname und den
+  internen Payload-Hash, bevor das bisherige Paket atomar ersetzt wird.
+- Cachedateien liegen ausschließlich im privaten Storage-Verzeichnis und werden
+  nur über authentifizierte Endpunkte ausgeliefert.
+
+Migration erforderlich: `npm run migrate`.
+
 ## [0.19.0] — Per-Build-Overrides: Quick-Paste, Klonen & Export
 
 ### Added

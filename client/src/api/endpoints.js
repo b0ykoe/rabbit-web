@@ -1,4 +1,4 @@
-import { apiFetch } from './client.js';
+import { apiFetch, apiUpload } from './client.js';
 
 // ── Meta ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,13 @@ export const authApi = {
 export const adminApi = {
   // Dashboard
   getDashboard: () => apiFetch('/api/admin/dashboard'),
+  getNavigationCaches: () => apiFetch('/api/admin/navigation-caches'),
+  uploadNavigationCaches: (serverId, files, onProgress) => {
+    const form = new FormData();
+    for (const file of files) form.append('files', file, file.name);
+    return apiUpload(`/api/admin/navigation-caches/${encodeURIComponent(serverId)}`,
+      form, onProgress);
+  },
 
   // Users
   getUsers:       (page = 1)    => apiFetch(`/api/admin/users?page=${page}`),

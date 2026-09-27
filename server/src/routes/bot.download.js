@@ -1,11 +1,81 @@
 import { Router } from 'express';
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import db from '../db.js';
+import { config } from '../config.js';
 import { validateBotToken, validateBotUserToken } from '../middleware/botToken.js';
 import { encryptFile } from '../crypto/aes.js';
 
 const router = Router();
+
+// Published MapViewer navigation cache catalog. The loader chooses a named
+// server first, then downloads the immutable manifest and its verified files.
+router.get('/navigation-caches', validateBotUserToken, async (_req, res) => {
+  const rows = await db('navigation_cache_packages as p')
+    .join('game_servers as s', 's.id', 'p.server_id')
+    .where('s.visible', true)
+    .orderBy('s.name', 'asc')
+    .select('s.id as server_id', 's.name as server_name', 's.variant',
+      'p.schema_version', 'p.file_count', 'p.total_bytes',
+      'p.manifest_sha256', 'p.uploaded_at');
+  res.json({ data: rows.map((row) => ({ ...row,
+    file_count: Number(row.file_count), total_bytes: Number(row.total_bytes),
+    schema_version: Number(row.schema_version),
+  })) });
+});
+
+router.get('/navigation-caches/:serverId/manifest', validateBotUserToken, async (req, res) => {
+  const serverId = Number.parseInt(req.params.serverId, 10);
+  const pack = await db('navigation_cache_packages as p')
+    .join('game_servers as s', 's.id', 'p.server_id')
+    .where({ 'p.server_id': serverId, 's.visible': true })
+    .select('p.id', 'p.server_id', 'p.schema_version', 'p.file_count',
+      'p.total_bytes', 'p.manifest_sha256', 'p.uploaded_at',
+      's.name as server_name', 's.variant').first();
+  if (!pack) return res.status(404).json({ error: 'Navigation cache package not found' });
+  const fileRows = await db('navigation_cache_files').where('package_id', pack.id)
+    .orderBy(['zone_no', 'file_name'])
+    .select('zone_no', 'file_name', 'byte_size', 'sha256', 'source_fingerprint');
+  const files = fileRows.map((file) => ({ ...file,
+    zone_no: Number(file.zone_no), byte_size: Number(file.byte_size),
+  }));
+  res.json({
+    server_id: pack.server_id, server_name: pack.server_name, variant: pack.variant,
+    schema_version: Number(pack.schema_version), file_count: Number(pack.file_count),
+    total_bytes: Number(pack.total_bytes), manifest_sha256: pack.manifest_sha256,
+    uploaded_at: pack.uploaded_at,
+    files: files.map((file) => ({ ...file,
+      url: `/api/bot/navigation-caches/${pack.server_id}/files/${encodeURIComponent(file.file_name)}`,
+    })),
+  });
+});
+
+router.get('/navigation-caches/:serverId/files/:fileName', validateBotUserToken, async (req, res) => {
+  const serverId = Number.parseInt(req.params.serverId, 10);
+  const fileName = path.basename(req.params.fileName);
+  if (fileName !== req.params.fileName || !/^zone_\d+_[0-9a-f]{64}\.mvnav$/i.test(fileName))
+    return res.status(400).json({ error: 'Invalid cache filename' });
+  const row = await db('navigation_cache_files as f')
+    .join('navigation_cache_packages as p', 'p.id', 'f.package_id')
+    .join('game_servers as s', 's.id', 'p.server_id')
+    .where({ 'p.server_id': serverId, 'f.file_name': fileName, 's.visible': true })
+    .select('f.file_name', 'f.byte_size', 'f.sha256', 'p.storage_key').first();
+  if (!row) return res.status(404).json({ error: 'Navigation cache file not found' });
+  const filePath = path.resolve(config.bot.navigationCacheDir, row.storage_key, row.file_name);
+  const expectedRoot = path.resolve(config.bot.navigationCacheDir) + path.sep;
+  if (!filePath.startsWith(expectedRoot) || !fs.existsSync(filePath))
+    return res.status(404).json({ error: 'Navigation cache file is unavailable' });
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.setHeader('Content-Length', String(row.byte_size));
+  res.setHeader('Content-Disposition', `attachment; filename="${row.file_name}"`);
+  res.setHeader('ETag', `"${row.sha256}"`);
+  res.setHeader('X-Content-SHA256', row.sha256);
+  fs.createReadStream(filePath).on('error', (error) => {
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+    else res.destroy(error);
+  }).pipe(res);
+});
 
 // GET /api/bot/version — active release versions, filtered by user's channels.
 // Shape (arch-aware, backward-compatible):

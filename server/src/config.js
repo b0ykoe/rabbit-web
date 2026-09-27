@@ -45,6 +45,7 @@ export const config = {
     ed25519PrivateKey: requireSecret('BOT_ED25519_PRIVATE_KEY', 128),
     ed25519PublicKey:  requireSecret('BOT_ED25519_PUBLIC_KEY',  64),
     privateDir:        process.env.BOT_PRIVATE_DIR || './private/releases',
+    navigationCacheDir: process.env.NAVIGATION_CACHE_DIR || './private/navigation-caches',
     sessionTimeoutSec: 30,  // sessions without heartbeat for this long are considered dead
   },
 

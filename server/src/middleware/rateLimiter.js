@@ -57,6 +57,10 @@ export const botHeartbeatLimiter = createLimiter(60_000, 600);   // 10s interval
 export const botHeartbeatSessionLimiter = createLimiter(60_000, 120, byBotSession); // bucket per session
 export const botEndLimiter       = createLimiter(60_000, 30);
 export const botDownloadLimiter  = createLimiter(60_000, 10);
+// A navigation package is intentionally split into one verified file per zone;
+// a full install may therefore issue hundreds of sequential GETs. Scope the
+// larger allowance to the signed user token instead of weakening DLL downloads.
+export const botNavigationCacheLimiter = createLimiter(60_000, 1024, byBotToken);
 // Per-token: every Loader instance and Bot session gets its own quota,
 // so multiple loaders + a running DLL on the same PC don't fight over
 // a shared 30/min IP bucket. 120/min covers /version + /changelog at

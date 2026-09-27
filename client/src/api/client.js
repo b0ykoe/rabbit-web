@@ -52,4 +52,29 @@ export async function apiFetch(path, options = {}) {
   return data;
 }
 
+// XMLHttpRequest is intentionally used only for large multipart uploads: fetch
+// does not expose browser upload progress, while cache packages can be hundreds
+// of megabytes.
+export function apiUpload(path, formData, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', path);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('X-XSRF-TOKEN', getCsrfToken());
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(event.loaded, event.total);
+    };
+    xhr.onerror = () => reject(new ApiError(0, { error: 'Upload connection failed' }));
+    xhr.onload = () => {
+      const data = (() => { try { return JSON.parse(xhr.responseText); } catch { return {}; } })();
+      if (xhr.status === 401) {
+        if (!window.location.pathname.startsWith('/login')) window.location.href = '/login';
+        reject(new ApiError(401, { error: 'Not authenticated' }));
+      } else if (xhr.status < 200 || xhr.status >= 300) reject(new ApiError(xhr.status, data));
+      else resolve(data);
+    };
+    xhr.send(formData);
+  });
+}
+
 export { ApiError };

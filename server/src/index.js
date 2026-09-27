@@ -13,7 +13,7 @@ import { requireAuth, requireAdmin, checkForcePasswordChange } from './middlewar
 import { startSessionCleanup } from './services/sessionCleanup.js';
 import {
   botLoginLimiter, botAuthStartLimiter, botHeartbeatLimiter, botEndLimiter,
-  botDownloadLimiter, botInfoLimiter, botConfigLimiter, botWorldLimiter,
+  botDownloadLimiter, botNavigationCacheLimiter, botInfoLimiter, botConfigLimiter, botWorldLimiter,
   webAuthLimiter, adminLimiter, portalLimiter,
 } from './middleware/rateLimiter.js';
 
@@ -33,6 +33,7 @@ import adminSessionsRoutes  from './routes/admin.sessions.js';
 import adminAuditRoutes     from './routes/admin.audit.js';
 import adminStatusesRoutes  from './routes/admin.statuses.js';
 import adminWorldRoutes     from './routes/admin.world.js';
+import adminNavigationCacheRoutes from './routes/admin.navigation-cache.js';
 import portalDashboardRoutes from './routes/portal.dashboard.js';
 import portalKeysRoutes     from './routes/portal.keys.js';
 import portalRedeemRoutes   from './routes/portal.redeem.js';
@@ -95,6 +96,7 @@ app.use('/api/bot/auth/start',     botAuthStartLimiter);
 app.use('/api/bot/auth/heartbeat', botHeartbeatLimiter);
 app.use('/api/bot/auth/end',       botEndLimiter);
 app.use('/api/bot/download',       botDownloadLimiter);
+app.use('/api/bot/navigation-caches', botNavigationCacheLimiter);
 app.use('/api/bot/version',        botInfoLimiter);
 app.use('/api/bot/changelog',      botInfoLimiter);
 app.use('/api/bot/config',         botConfigLimiter);
@@ -153,6 +155,7 @@ app.use('/api/admin/statuses',  adminStatusesRoutes);
 app.use('/api/admin/settings',  adminSettingsRoutes);
 app.use('/api/admin/feature-flags', adminFlagsRoutes);
 app.use('/api/admin/world',     adminWorldRoutes);
+app.use('/api/admin/navigation-caches', adminNavigationCacheRoutes);
 
 // ── Portal API Routes ────────────────────────────────────────────────────────
 
