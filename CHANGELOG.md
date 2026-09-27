@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.20.2] — Komprimierter Navigation-Cache-Upload
+
+### Changed
+
+- Die Navigation-Cache-Verwaltung lädt nun ein einzelnes ZIP-Archiv statt bis
+  zu 512 separater Browser-Dateien hoch. Das reduziert Multipart-Overhead und
+  macht große Cachepakete hinter Reverse-Proxys deutlich zuverlässiger.
+- Der Upload zeigt nach Abschluss der Übertragung explizit die serverseitige
+  Entpack-, Prüf- und Veröffentlichungsphase an.
+
+### Security / Integrity
+
+- ZIP-Inhalte werden streamingbasiert in ein privates temporäres Verzeichnis
+  entpackt. Pfade aus dem Archiv werden niemals als lokale Pfade übernommen.
+- Anzahl, Einzelgröße und entpackte Gesamtgröße sind begrenzt; doppelte Namen,
+  beschädigte Archive und ungültige Cachedateien werden abgewiesen.
+- Jede entpackte `.mvnav` durchläuft weiterhin die vollständige Header-,
+  Dateinamen-, Fingerprint- und SHA-256-Prüfung, bevor das aktive Paket atomar
+  ersetzt wird. Archiv und temporäre Dateien werden anschließend gelöscht.
+
 ## [0.20.1] — Navigation-Cache-Verwaltung im Admin-Panel
 
 ### Changed

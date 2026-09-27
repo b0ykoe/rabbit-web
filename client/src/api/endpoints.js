@@ -28,6 +28,12 @@ export const adminApi = {
     return apiUpload(`/api/admin/navigation-caches/${encodeURIComponent(serverId)}`,
       form, onProgress);
   },
+  uploadNavigationCacheArchive: (serverId, archive, onProgress) => {
+    const form = new FormData();
+    form.append('archive', archive, archive.name);
+    return apiUpload(`/api/admin/navigation-caches/${encodeURIComponent(serverId)}/archive`,
+      form, onProgress);
+  },
   deleteNavigationCaches: (serverId) => apiFetch(
     `/api/admin/navigation-caches/${encodeURIComponent(serverId)}`, { method: 'DELETE' }),
 
