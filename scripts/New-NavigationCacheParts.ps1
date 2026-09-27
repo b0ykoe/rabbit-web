@@ -1,6 +1,6 @@
 param(
     [string]$CacheDirectory = (Join-Path $env:APPDATA 'chrome_143\mapviewer_nav_cache\v4'),
-    [string]$OutputDirectory = (Join-Path (Get-Location) 'navigation-cache-parts'),
+    [string]$OutputDirectory = '',
     [string]$PackageName = 'nemesis-navigation-cache-v4',
     [ValidateRange(8, 80)]
     [int]$PartSizeMiB = 64
@@ -8,6 +8,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $portalDirectory = Split-Path -Parent $PSScriptRoot
+    $OutputDirectory = Join-Path $portalDirectory 'navigation-cache-parts'
+}
 
 $cachePath = [System.IO.Path]::GetFullPath($CacheDirectory)
 if (-not (Test-Path -LiteralPath $cachePath -PathType Container)) {

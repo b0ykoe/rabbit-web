@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.20.4] — Stabilerer Part-Upload und eindeutiger Generatorpfad
+
+### Fixed
+
+- Das redundante Multer-Limit `parts: 1` wurde entfernt. Es konnte bereits bei
+  einem einzelnen gültigen Datei-Part fälschlich `Too many parts` auslösen;
+  Datei- und Größenlimits bleiben weiterhin aktiv.
+
+### Changed
+
+- Admin-Startseite und Navigation-Cache-Seite zeigen jetzt den vollständigen
+  Befehl einschließlich des lokalen `portal-v2`-Ordners und benennen den exakt
+  auszuwählenden Zeitstempel-Ordner.
+- Der Generator schreibt unabhängig vom aktuellen Terminal-Verzeichnis immer
+  nach `portal-v2/navigation-cache-parts/`. Dieser lokale Ausgabeordner wird
+  von Git ignoriert.
+
 ## [0.20.3] — Cloudflare-sicherer Navigation-Cache-Part-Upload
 
 ### Added

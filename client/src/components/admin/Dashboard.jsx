@@ -55,12 +55,13 @@ export default function Dashboard() {
                 <Box component="code" sx={{ display: 'block', p: 1.25, mb: 1.25,
                   bgcolor: 'background.default', border: '1px solid', borderColor: 'divider',
                   borderRadius: 1, fontSize: '0.75rem', overflowX: 'auto', userSelect: 'all' }}>
-                  .\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis
+                  cd D:\Personal\repositories\LastChaos\BotProject\portal-v2<br />
+                  powershell -ExecutionPolicy Bypass -File .\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis
                 </Box>
                 <Box component="ol" sx={{ mt: 0, mb: 1.5, pl: 2.5, color: 'text.secondary',
                   '& li': { pl: 0.5, mb: 0.35, fontSize: '0.8125rem' } }}>
-                  <li>Run the command in the portal-v2 repository.</li>
-                  <li>Select the generated timestamped parts folder.</li>
+                  <li>Run the command above from the portal-v2 folder containing package.json.</li>
+                  <li>Select portal-v2\navigation-cache-parts\Nemesis-YYYYMMDD-HHMMSS.</li>
                   <li>Upload all parts sequentially.</li>
                   <li>Press Analyze &amp; publish after every part is present.</li>
                 </Box>

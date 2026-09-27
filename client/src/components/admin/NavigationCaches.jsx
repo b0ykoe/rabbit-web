@@ -181,10 +181,19 @@ export default function NavigationCaches() {
       <Paper sx={{ p: 2.5, mb: 3 }}>
         <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 2 }}>Publish cache package</Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
-          Run <code>.\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis</code>, then
-          select the generated folder. Its 64 MiB parts are uploaded sequentially below
-          Cloudflare&apos;s 100 MB request limit. Publishing starts only when you press
-          Analyze &amp; publish.
+          <Typography variant="body2" fontWeight={600} sx={{ mb: 0.75 }}>
+            Run the generator from the portal-v2 folder (the folder containing package.json):
+          </Typography>
+          <Box component="code" sx={{ display: 'block', p: 1, mb: 0.75,
+            bgcolor: 'rgba(0,0,0,0.18)', borderRadius: 1, overflowX: 'auto', userSelect: 'all' }}>
+            cd D:\Personal\repositories\LastChaos\BotProject\portal-v2<br />
+            powershell -ExecutionPolicy Bypass -File .\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis
+          </Box>
+          <Typography variant="body2">
+            It always writes to <code>portal-v2\navigation-cache-parts\Nemesis-YYYYMMDD-HHMMSS</code>.
+            Press <strong>Select parts folder</strong> and select exactly that timestamped folder.
+            Then upload its 64 MiB parts and press <strong>Analyze &amp; publish</strong>.
+          </Typography>
         </Alert>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
           <FormControl size="small" sx={{ minWidth: 240 }}>

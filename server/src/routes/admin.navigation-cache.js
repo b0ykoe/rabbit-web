@@ -36,12 +36,12 @@ const upload = multer({
 });
 const archiveUpload = multer({
   dest: temp,
-  limits: { files: 1, fileSize: MAX_ARCHIVE_BYTES, fields: 0, parts: 1 },
+  limits: { files: 1, fileSize: MAX_ARCHIVE_BYTES },
   fileFilter: (_req, file, cb) => cb(null, /\.zip$/i.test(file.originalname)),
 });
 const partUpload = multer({
   dest: temp,
-  limits: { files: 1, fileSize: MAX_UPLOAD_PART_BYTES, fields: 0, parts: 1 },
+  limits: { files: 1, fileSize: MAX_UPLOAD_PART_BYTES },
   fileFilter: (_req, file, cb) => cb(null, /\.part\d{4}\.bin$/i.test(file.originalname)),
 });
 const router = Router();
