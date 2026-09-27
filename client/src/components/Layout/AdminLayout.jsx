@@ -16,6 +16,7 @@ import FiberSmartRecordIcon from '@mui/icons-material/FiberSmartRecord';
 import LogoutIcon from '@mui/icons-material/Logout';
 import SettingsIcon from '@mui/icons-material/Settings';
 import StorefrontIcon from '@mui/icons-material/Storefront';
+import StorageIcon from '@mui/icons-material/Storage';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { metaApi } from '../../api/endpoints.js';
 
@@ -34,6 +35,7 @@ const navItems = [
   { label: 'Statuses',  icon: <AnnouncementIcon />, path: '/admin/statuses' },
   { label: 'Audit Log', icon: <HistoryIcon />,     path: '/admin/audit' },
   { label: 'Servers', icon: <PublicIcon />,    path: '/admin/world', superAdmin: true },
+  { label: 'Navigation Caches', icon: <StorageIcon />, path: '/admin/navigation-caches', superAdmin: true },
   { label: 'Recording Sessions', icon: <FiberSmartRecordIcon />, path: '/admin/recording-sessions', superAdmin: true },
   { label: 'Settings',  icon: <SettingsIcon />,    path: '/admin/settings' },
 ];

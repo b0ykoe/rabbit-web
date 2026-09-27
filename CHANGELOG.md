@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.20.1] — Navigation-Cache-Verwaltung im Admin-Panel
+
+### Changed
+
+- Die Navigation-Cache-Verwaltung befindet sich jetzt als eigener,
+  Super-Admin-geschützter Bereich im Admin-Panel statt im Benutzer-Dashboard.
+- Die neue Übersicht zeigt für jeden Spielserver Veröffentlichungsstatus,
+  Schema, Dateianzahl, Gesamtgröße und Veröffentlichungszeitpunkt.
+
+### Added
+
+- Veröffentlichte Cachepakete können im Admin-Panel vollständig ersetzt oder
+  nach Bestätigung gelöscht werden; Löschungen werden im Audit-Log erfasst.
+
 ## [0.20.0] — Serverbezogene MapViewer-Navigationscaches
 
 ### Added

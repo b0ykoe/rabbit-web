@@ -16,6 +16,7 @@ import Sessions from './components/admin/Sessions.jsx';
 import Statuses from './components/admin/Statuses.jsx';
 import AuditLog from './components/admin/AuditLog.jsx';
 import AdminSettings from './components/admin/Settings.jsx';
+import NavigationCaches from './components/admin/NavigationCaches.jsx';
 
 // Admin World (Servers) — super-admin-only subtree.
 import WorldOutlet from './components/admin/world/WorldOutlet.jsx';
@@ -59,6 +60,11 @@ export default function AppRouter() {
         <Route path="sessions" element={<Sessions />} />
         <Route path="statuses" element={<Statuses />} />
         <Route path="audit" element={<AuditLog />} />
+        <Route path="navigation-caches" element={
+          <ProtectedRoute role="super_admin">
+            <NavigationCaches />
+          </ProtectedRoute>
+        } />
         {/* Admin World (Servers) — guarded ONCE at super_admin via WorldOutlet. */}
         <Route path="world" element={
           <ProtectedRoute role="super_admin">

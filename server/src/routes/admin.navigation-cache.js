@@ -69,7 +69,7 @@ async function inspectCache(file) {
     temporaryPath: file.path };
 }
 
-// Includes empty servers so the homepage can always offer the intended target.
+// Includes empty servers so the admin page can always offer the intended target.
 router.get('/', requireSuperAdmin, async (_req, res) => {
   const servers = await db('game_servers as s')
     .leftJoin('navigation_cache_packages as p', 'p.server_id', 's.id')
@@ -178,6 +178,29 @@ router.post('/:serverId', requireSuperAdmin, upload.array('files', 512), async (
   res.status(201).json({ message: `Published ${inspected.length} caches for ${server.name}`,
     schema_version: SCHEMA, file_count: inspected.length, total_bytes: totalBytes,
     manifest_sha256: manifestSha256 });
+});
+
+router.delete('/:serverId', requireSuperAdmin, async (req, res) => {
+  const serverId = Number.parseInt(req.params.serverId, 10);
+  if (!Number.isInteger(serverId) || serverId <= 0)
+    return res.status(400).json({ error: 'Invalid server id' });
+
+  const server = await db('game_servers').where('id', serverId).first();
+  if (!server) return res.status(404).json({ error: 'Server not found' });
+  const existing = await db('navigation_cache_packages').where('server_id', serverId).first();
+  if (!existing) return res.status(404).json({ error: 'No navigation cache is published for this server' });
+
+  await db('navigation_cache_packages').where('id', existing.id).del();
+  if (/^server-\d+-\d+-[0-9a-f]{12}$/.test(existing.storage_key))
+    fs.rmSync(path.join(root, existing.storage_key), { recursive: true, force: true });
+
+  await recordAudit(db, req, {
+    action: 'navigation_cache.delete', subjectType: 'game_server', subjectId: serverId,
+    oldValues: { server: server.name, schema_version: existing.schema_version,
+      file_count: Number(existing.file_count), total_bytes: Number(existing.total_bytes),
+      manifest_sha256: existing.manifest_sha256 },
+  });
+  res.json({ message: `Deleted published navigation caches for ${server.name}` });
 });
 
 export default router;
