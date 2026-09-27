@@ -28,49 +28,125 @@ export default function NavigationCaches() {
     () => adminApi.getNavigationCaches(), []);
   const inputRef = useRef(null);
   const [serverId, setServerId] = useState('');
-  const [archive, setArchive] = useState(null);
+  const [selection, setSelection] = useState(null);
+  const [uploadSession, setUploadSession] = useState(null);
+  const [uploadedIndexes, setUploadedIndexes] = useState(new Set());
   const [progress, setProgress] = useState(0);
+  const [currentPart, setCurrentPart] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [message, setMessage] = useState(null);
   const servers = data?.data || [];
-  const selectedBytes = archive?.size || 0;
+  const busy = uploading || analyzing;
 
   useEffect(() => {
     if (!serverId && servers.length) setServerId(String(servers[0].server_id));
   }, [serverId, servers]);
 
-  const chooseArchive = (event) => {
-    const selected = event.target.files?.[0] || null;
-    const valid = selected && selected.name.toLowerCase().endsWith('.zip');
-    setArchive(valid ? selected : null);
+  const clearSelection = () => {
+    setSelection(null);
+    setUploadSession(null);
+    setUploadedIndexes(new Set());
     setProgress(0);
-    setMessage(valid
-      ? null
-      : { severity: 'warning', text: 'Select a .zip archive containing the v4 .mvnav files.' });
+    setCurrentPart(0);
+    if (inputRef.current) inputRef.current.value = '';
   };
 
-  const publish = async () => {
-    if (!serverId || !archive) return;
-    setUploading(true);
+  const chooseParts = async (event) => {
+    const files = Array.from(event.target.files || []);
+    setSelection(null);
+    setUploadSession(null);
+    setUploadedIndexes(new Set());
     setProgress(0);
-    setMessage(null);
+    setCurrentPart(0);
+    const manifestFile = files.find((file) => file.name.toLowerCase() === 'navigation-cache-parts.json');
+    if (!manifestFile) {
+      setMessage({ severity: 'warning', text: 'The selected folder has no navigation-cache-parts.json.' });
+      return;
+    }
     try {
-      const result = await adminApi.uploadNavigationCacheArchive(serverId, archive,
-        (loaded, total) => setProgress(total ? (loaded / total) * 100 : 0));
+      const manifest = JSON.parse((await manifestFile.text()).replace(/^\uFEFF/, ''));
+      if (manifest.format !== 'rabbit-navigation-cache-parts' || manifest.version !== 1 ||
+          !Array.isArray(manifest.parts) || manifest.parts.length !== manifest.part_count)
+        throw new Error('Unsupported or incomplete part manifest');
+      const byName = new Map(files.map((file) => [file.name.toLowerCase(), file]));
+      const parts = [...manifest.parts].sort((a, b) => a.index - b.index).map((part) => {
+        const file = byName.get(String(part.file_name).toLowerCase());
+        if (!file) throw new Error(`Missing ${part.file_name}`);
+        if (file.size !== part.byte_size) throw new Error(`${part.file_name} has the wrong size`);
+        return { manifest: part, file };
+      });
+      setSelection({ manifest, parts });
+      setMessage({ severity: 'success', text: `Ready to upload ${parts.length} verified parts.` });
+    } catch (error) {
+      setMessage({ severity: 'error', text: `Cannot use part folder: ${error.message}` });
+    }
+  };
+
+  const uploadParts = async () => {
+    if (!serverId || !selection) return;
+    setUploading(true);
+    setMessage(null);
+    let session = uploadSession;
+    const completedIndexes = new Set(uploadedIndexes);
+    try {
+      if (!session) {
+        session = await adminApi.startNavigationCachePartUpload(serverId, selection.manifest);
+        setUploadSession(session);
+      }
+      let completedBytes = selection.parts
+        .filter(({ manifest }) => completedIndexes.has(manifest.index))
+        .reduce((sum, { manifest }) => sum + manifest.byte_size, 0);
+      for (const { manifest, file } of selection.parts) {
+        if (completedIndexes.has(manifest.index)) continue;
+        setCurrentPart(manifest.index);
+        await adminApi.uploadNavigationCachePart(serverId, session.upload_id, manifest.index, file,
+          (loaded) => setProgress(Math.min(100,
+            ((completedBytes + Math.min(loaded, manifest.byte_size)) /
+              selection.manifest.archive_size) * 100)));
+        completedBytes += manifest.byte_size;
+        completedIndexes.add(manifest.index);
+        setUploadedIndexes(new Set(completedIndexes));
+        setProgress((completedBytes / selection.manifest.archive_size) * 100);
+      }
       setProgress(100);
-      setMessage({ severity: 'success', text: result.message });
-      setArchive(null);
-      if (inputRef.current) inputRef.current.value = '';
-      await refetch();
+      setCurrentPart(0);
+      setMessage({ severity: 'success', text: 'All parts are uploaded. Analyze and publish the package when ready.' });
     } catch (error) {
       const text = error.status === 0
-        ? `${error.message}. Check the Cloudflare/Nginx upload-size and timeout settings.`
+        ? `${error.message}. Retry to continue with the remaining parts.`
         : error.message;
       setMessage({ severity: 'error', text });
     } finally {
       setUploading(false);
     }
+  };
+
+  const analyzeAndPublish = async () => {
+    if (!serverId || !selection || !uploadSession ||
+        uploadedIndexes.size !== selection.parts.length) return;
+    setAnalyzing(true);
+    setMessage(null);
+    try {
+      const result = await adminApi.finalizeNavigationCachePartUpload(serverId, uploadSession.upload_id);
+      setMessage({ severity: 'success', text: result.message });
+      clearSelection();
+      await refetch();
+    } catch (error) {
+      setMessage({ severity: 'error', text: error.message });
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const discardUpload = async () => {
+    if (uploadSession && serverId) {
+      try { await adminApi.cancelNavigationCachePartUpload(serverId, uploadSession.upload_id); }
+      catch (_) { /* an expired session is already discarded */ }
+    }
+    clearSelection();
+    setMessage(null);
   };
 
   const removePackage = async (server) => {
@@ -94,8 +170,8 @@ export default function NavigationCaches() {
       <Box sx={{ mb: 3 }}>
         <Typography variant="h6" fontWeight={600}>Navigation Caches</Typography>
         <Typography variant="body2" color="text.secondary">
-          Publish MapViewer schema-v4 cache packages for each game server. Uploading a new
-          ZIP archive replaces that server&apos;s currently published package.
+          Upload a MapViewer schema-v4 package in Cloudflare-safe parts, then analyze and
+          publish it for the selected game server.
         </Typography>
       </Box>
 
@@ -105,15 +181,17 @@ export default function NavigationCaches() {
       <Paper sx={{ p: 2.5, mb: 3 }}>
         <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 2 }}>Publish cache package</Typography>
         <Alert severity="info" sx={{ mb: 2 }}>
-          Create one ZIP from <code>%APPDATA%\chrome_143\mapviewer_nav_cache\v4</code>.
-          The server extracts only .mvnav files, validates every cache and stores the verified
-          files individually for the loader.
+          Run <code>.\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis</code>, then
+          select the generated folder. Its 64 MiB parts are uploaded sequentially below
+          Cloudflare&apos;s 100 MB request limit. Publishing starts only when you press
+          Analyze &amp; publish.
         </Alert>
         <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
           <FormControl size="small" sx={{ minWidth: 240 }}>
             <InputLabel>Game server</InputLabel>
             <Select value={serverId} label="Game server"
-              onChange={(event) => setServerId(event.target.value)} disabled={uploading}>
+              onChange={(event) => setServerId(event.target.value)}
+              disabled={busy || !!uploadSession}>
               {servers.map((server) => (
                 <MenuItem key={server.server_id} value={String(server.server_id)}>
                   {server.server_name || server.variant || `Server ${server.server_id}`}
@@ -123,29 +201,49 @@ export default function NavigationCaches() {
           </FormControl>
 
           <Button component="label" variant="outlined" startIcon={<FolderOpenIcon />}
-            disabled={uploading || loading}>
-            Select cache ZIP
-            <input ref={inputRef} hidden type="file" accept=".zip,application/zip"
-              onChange={chooseArchive} />
+            disabled={busy || loading || !!uploadSession}>
+            Select parts folder
+            <input ref={inputRef} hidden type="file" multiple onChange={chooseParts}
+              {...{ webkitdirectory: '', directory: '' }} />
           </Button>
-          <Button variant="contained" startIcon={<UploadFileIcon />} onClick={publish}
-            disabled={uploading || !serverId || !archive}>
-            {uploading ? 'Uploading…' : 'Upload cache'}
+          <Button variant="contained" startIcon={<UploadFileIcon />} onClick={uploadParts}
+            disabled={busy || !serverId || !selection ||
+              uploadedIndexes.size === selection?.parts.length}>
+            {uploading ? `Uploading part ${currentPart}/${selection?.parts.length || 0}…` :
+              (uploadSession ? 'Continue upload' : 'Upload parts')}
           </Button>
+          <Button variant="contained" color="success" onClick={analyzeAndPublish}
+            disabled={busy || !selection || !uploadSession ||
+              uploadedIndexes.size !== selection.parts.length}>
+            {analyzing ? 'Analyzing…' : 'Analyze & publish'}
+          </Button>
+          {(selection || uploadSession) && (
+            <Button variant="text" color="inherit" onClick={discardUpload} disabled={busy}>
+              Reset
+            </Button>
+          )}
           <Typography variant="body2" color="text.secondary">
-            {archive
-              ? `${archive.name} · ${formatBytes(selectedBytes)}`
-              : 'No cache ZIP selected'}
+            {selection
+              ? `${selection.parts.length} parts · ${formatBytes(selection.manifest.archive_size)} compressed`
+              : 'No parts folder selected'}
           </Typography>
         </Box>
 
-        {uploading && (
+        {(uploading || progress > 0) && selection && (
           <Box sx={{ mt: 2 }}>
             <LinearProgress variant="determinate" value={progress} />
             <Typography variant="caption" color="text.secondary">
               {progress >= 100
-                ? 'Upload complete · server is extracting, validating and publishing the caches…'
-                : `Uploading ${progress.toFixed(0)}% · ${formatBytes(selectedBytes)}`}
+                ? `All ${selection.parts.length} parts uploaded · ready for analysis`
+                : `Part ${currentPart}/${selection.parts.length} · ${progress.toFixed(0)}% total`}
+            </Typography>
+          </Box>
+        )}
+        {analyzing && (
+          <Box sx={{ mt: 2 }}>
+            <LinearProgress />
+            <Typography variant="caption" color="text.secondary">
+              Reassembling ZIP, verifying hashes, inspecting caches and publishing package…
             </Typography>
           </Box>
         )}
@@ -187,7 +285,7 @@ export default function NavigationCaches() {
                     </TableCell>
                     <TableCell align="right">
                       <Button size="small" color="error" startIcon={<DeleteOutlineIcon />}
-                        disabled={!published || deletingId !== null || uploading}
+                        disabled={!published || deletingId !== null || busy}
                         onClick={() => removePackage(server)}>
                         {deletingId === server.server_id ? 'Deleting…' : 'Delete'}
                       </Button>

@@ -1,16 +1,21 @@
 import {
-  Grid, Typography, Paper, Box, Chip,
+  Grid, Typography, Paper, Box, Chip, Button,
 } from '@mui/material';
+import { Link as RouterLink } from 'react-router-dom';
 import PeopleIcon from '@mui/icons-material/People';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import SensorsIcon from '@mui/icons-material/Sensors';
+import StorageIcon from '@mui/icons-material/Storage';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import StatCard from '../common/StatCard.jsx';
 import CopyableText from '../common/CopyableText.jsx';
 import { adminApi } from '../../api/endpoints.js';
 import { useApi } from '../../hooks/useApi.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { getChannelColor } from '../../utils/format.js';
 
 export default function Dashboard() {
+  const { user } = useAuth();
   const { data, loading } = useApi(() => adminApi.getDashboard(), []);
   const now = Math.floor(Date.now() / 1000);
 
@@ -34,6 +39,44 @@ export default function Dashboard() {
           <StatCard label="Live Sessions" value={stats.liveSessions} icon={<SensorsIcon />} color="primary.main" />
         </Grid>
       </Grid>
+
+      {user?.role === 'super_admin' && (
+        <Box sx={{ mb: 4 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Navigation cache publishing
+          </Typography>
+          <Paper sx={{ p: 2.5 }}>
+            <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start' }}>
+              <StorageIcon color="primary" sx={{ mt: 0.25 }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="body2" fontWeight={600} sx={{ mb: 0.75 }}>
+                  Generate Cloudflare-safe 64 MiB upload parts
+                </Typography>
+                <Box component="code" sx={{ display: 'block', p: 1.25, mb: 1.25,
+                  bgcolor: 'background.default', border: '1px solid', borderColor: 'divider',
+                  borderRadius: 1, fontSize: '0.75rem', overflowX: 'auto', userSelect: 'all' }}>
+                  .\scripts\New-NavigationCacheParts.ps1 -PackageName Nemesis
+                </Box>
+                <Box component="ol" sx={{ mt: 0, mb: 1.5, pl: 2.5, color: 'text.secondary',
+                  '& li': { pl: 0.5, mb: 0.35, fontSize: '0.8125rem' } }}>
+                  <li>Run the command in the portal-v2 repository.</li>
+                  <li>Select the generated timestamped parts folder.</li>
+                  <li>Upload all parts sequentially.</li>
+                  <li>Press Analyze &amp; publish after every part is present.</li>
+                </Box>
+                <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 1.5 }}>
+                  The currently published package remains active until reassembly, SHA-256 checks
+                  and all `.mvnav` validations have completed successfully.
+                </Typography>
+                <Button component={RouterLink} to="/admin/navigation-caches" size="small"
+                  variant="contained" endIcon={<ArrowForwardIcon />}>
+                  Open Navigation Caches
+                </Button>
+              </Box>
+            </Box>
+          </Paper>
+        </Box>
+      )}
 
       {/* Active Releases */}
       <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1, textTransform: 'uppercase', letterSpacing: '0.05em' }}>

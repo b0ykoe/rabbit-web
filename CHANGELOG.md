@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.20.3] — Cloudflare-sicherer Navigation-Cache-Part-Upload
+
+### Added
+
+- `scripts/New-NavigationCacheParts.ps1` komprimiert den lokalen v4-Cache,
+  zerlegt ihn standardmäßig in 64-MiB-Parts und erzeugt ein SHA-256-Manifest.
+- Das Admin-Panel wählt den gesamten Parts-Ordner aus, lädt alle Parts
+  sequenziell in getrennten Requests hoch und bietet anschließend einen
+  separaten **Analyze & publish**-Schritt an.
+- Die Super-Admin-Startseite zeigt den Generator-Befehl, den vollständigen
+  Ablauf und einen direkten Link zur Navigation-Cache-Verwaltung.
+
+### Security / Integrity
+
+- Upload-Sitzungen sind an Spielserver und Super-Admin gebunden, laufen nach
+  24 Stunden ab und veröffentlichen niemals unvollständige Pakete.
+- Jeder Part wird beim Empfang und erneut beim Zusammensetzen über Größe und
+  SHA-256 geprüft. Danach werden Größe und SHA-256 des Gesamt-ZIP sowie alle
+  enthaltenen `.mvnav`-Dateien validiert, bevor das aktive Paket atomar
+  ersetzt wird.
+
 ## [0.20.2] — Komprimierter Navigation-Cache-Upload
 
 ### Changed

@@ -34,6 +34,22 @@ export const adminApi = {
     return apiUpload(`/api/admin/navigation-caches/${encodeURIComponent(serverId)}/archive`,
       form, onProgress);
   },
+  startNavigationCachePartUpload: (serverId, manifest) => apiFetch(
+    `/api/admin/navigation-caches/${encodeURIComponent(serverId)}/parts/start`,
+    { method: 'POST', body: JSON.stringify(manifest) }),
+  uploadNavigationCachePart: (serverId, uploadId, partIndex, file, onProgress) => {
+    const form = new FormData();
+    form.append('part', file, file.name);
+    return apiUpload(
+      `/api/admin/navigation-caches/${encodeURIComponent(serverId)}/parts/${encodeURIComponent(uploadId)}/${partIndex}`,
+      form, onProgress);
+  },
+  finalizeNavigationCachePartUpload: (serverId, uploadId) => apiFetch(
+    `/api/admin/navigation-caches/${encodeURIComponent(serverId)}/parts/${encodeURIComponent(uploadId)}/finalize`,
+    { method: 'POST' }),
+  cancelNavigationCachePartUpload: (serverId, uploadId) => apiFetch(
+    `/api/admin/navigation-caches/${encodeURIComponent(serverId)}/parts/${encodeURIComponent(uploadId)}`,
+    { method: 'DELETE' }),
   deleteNavigationCaches: (serverId) => apiFetch(
     `/api/admin/navigation-caches/${encodeURIComponent(serverId)}`, { method: 'DELETE' }),
 
